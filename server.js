@@ -747,12 +747,12 @@ app.get('/test-contact-check', async (req, res) => {
 });
 
 // Schedule polling
-cron.schedule('*/20 * * * *', () => {
+cron.schedule('*/2880 * * * *', () => {
   console.log('Scheduled polling for new contacts...');
   checkNewContacts();
 });
 
-cron.schedule('*/20 * * * *', () => {
+cron.schedule('*/2880 * * * *', () => {
   console.log('Scheduled polling for payment status...');
   checkPaymentStatus();
 });
