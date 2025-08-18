@@ -233,7 +233,7 @@ const checkPaymentStatus = async () => {
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
     const twentyMinutesAgo = now.clone().subtract(20, 'minutes').format('YYYY-MM-DD HH:mm:ss');
-    const targetDate = moment('2025-05-24').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
+    const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
     console.log(`Checking payments edited after ${twentyMinutesAgo} for jobs completed on or after ${targetDate}`);
 
     // Step 1: Fetch payments edited in the last 20 minutes
