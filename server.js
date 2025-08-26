@@ -541,7 +541,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
 
     // Build job description, including message only if available
     const jobDescriptionWithMessage = message
-      ? `Message: ${message}\nGHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`
+      ? `Enquiry details: ${message}\nGHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`
       : `GHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`;
     const jobData = {
       company_uuid: companyUuid,
