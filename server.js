@@ -524,7 +524,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
         const messageField = customFields.find(field => 
           (field.name && (field.name === 'Message' || field.name.toLowerCase() === 'message')) ||
           (field.label && (field.label === 'Message' || field.label.toLowerCase() === 'message')) ||
-          (field.id && (field.id === 'J2Bl5y1wz6iBQEyC4wtY' || field.id === 'J2Bl5y1wz6iBQEyC4wtY'))
+          (field.id && (field.id === 'VvhUQGlzD80PnB9aYdL4' || field.id === 'VvhUQGlzD80PnB9aYdL4'))
         );
         if (messageField && (messageField.value || messageField.values)) {
           message = messageField.value || (messageField.values && messageField.values[0]) || '';
