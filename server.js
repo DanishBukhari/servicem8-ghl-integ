@@ -314,6 +314,27 @@ const checkPaymentStatus = async () => {
         continue;
       }
 
+      // Fetch job category
+      let categoryName = '';
+      if (job.category_uuid) {
+        try {
+          const categoryResponse = await serviceM8Api.get(`/category.json?$filter=uuid eq '${job.category_uuid}'`);
+          const category = categoryResponse.data[0];
+          if (category) {
+            categoryName = (category.name || '').trim().toLowerCase();
+            console.log(`Fetched category for job ${jobUuid}: ${categoryName}`);
+          }
+        } catch (error) {
+          console.error(`Error fetching category for job ${jobUuid}:`, error.response ? error.response.data : error.message);
+        }
+      }
+
+      if (categoryName === 'Real Estate Agents') {
+        console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents`);
+        processedJobs.add(paymentUuid);
+        continue;
+      }
+
       // Step 7: Fetch GHL Contact ID and company_uuid
       let ghlContactId = '';
       if (job.job_description) {
