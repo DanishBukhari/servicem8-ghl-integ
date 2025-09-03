@@ -17,11 +17,17 @@ app.use(express.json());
 // Configure multer for file uploads
 const upload = multer({ dest: 'uploads/' });
 
-const SERVICE_M8_USERNAME = process.env.SERVICE_M8_USERNAME;
-const SERVICE_M8_PASSWORD = process.env.SERVICE_M8_PASSWORD;
-const GHL_API_KEY = process.env.GHL_API_KEY;
-const GHL_WEBHOOK_URL = process.env.GHL_WEBHOOK_URL;
 const PORT = process.env.PORT || 3000;
+
+// GHL credentials
+const CLIENT_ID = process.env.GHL_CLIENT_ID;
+const CLIENT_SECRET = process.env.GHL_CLIENT_SECRET;
+const REDIRECT_URI = process.env.GHL_REDIRECT_URI || `http://localhost:${PORT}/callback`;
+
+// ServiceM8 credentials
+const SERVICE_M8_API_KEY = process.env.SERVICE_M8_API_KEY;
+const SERVICE_M8_STAFF_UUID = process.env.SERVICE_M8_STAFF_UUID;
+const GHL_WEBHOOK_URL = process.env.GHL_WEBHOOK_URL;
 
 // Ensure uploads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'Uploads');
@@ -29,28 +35,132 @@ fsPromises.mkdir(UPLOADS_DIR, { recursive: true }).catch((error) => {
   console.error('Error creating uploads directory:', error.message);
 });
 
+// File-based token storage
+const TOKEN_FILE = './tokens.json';
+
+// Utility: Save tokens
+function saveTokens(tokens) {
+  fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+}
+
+// Utility: Load tokens
+function loadTokens() {
+  if (fs.existsSync(TOKEN_FILE)) {
+    return JSON.parse(fs.readFileSync(TOKEN_FILE));
+  }
+  return null;
+}
+
+// OAuth: Redirect to GHL auth page
+app.get('/auth', (req, res) => {
+  const url = `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(
+    REDIRECT_URI
+  )}&scope=calendars.readonly+calendars.write+calendars%2Fevents.write+calendars%2Fevents.readonly+users.readonly+contacts.readonly`;
+  res.redirect(url);
+});
+
+// OAuth: Handle callback and exchange code for tokens
+app.get('/callback', async (req, res) => {
+  const code = req.query.code;
+  if (!code) return res.status(400).send('No code provided!');
+
+  try {
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: REDIRECT_URI,
+    });
+
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/oauth/token',
+      params,
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }
+    );
+
+    const tokens = {
+      ...response.data,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+
+    saveTokens(tokens);
+
+    res.send('✅ Tokens saved! You can now use the API.');
+  } catch (err) {
+    console.error('Token exchange error:', err.response?.data || err.message);
+    res.status(500).send('Failed to exchange code for tokens.');
+  }
+});
+
+// OAuth: Auto-refresh token if expired
+async function getAccessToken() {
+  let tokens = loadTokens();
+
+  if (!tokens) {
+    throw new Error('No tokens found. Visit /auth first.');
+  }
+
+  const now = Math.floor(Date.now() / 1000);
+  const expiry = tokens.created_at ? tokens.created_at + tokens.expires_in : 0;
+
+  if (now >= expiry) {
+    console.log('🔄 Refreshing access token...');
+
+    const params = new URLSearchParams({
+      client_id: CLIENT_ID,
+      client_secret: CLIENT_SECRET,
+      grant_type: 'refresh_token',
+      refresh_token: tokens.refresh_token,
+    });
+
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/oauth/token',
+      params,
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }
+    );
+
+    tokens = {
+      ...response.data,
+      refresh_token: tokens.refresh_token,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+
+    saveTokens(tokens);
+  }
+
+  return tokens.access_token;
+}
+
 // Axios instance for ServiceM8
 const serviceM8Api = axios.create({
   baseURL: 'https://api.servicem8.com/api_1.0',
-  headers: { Accept: 'application/json',
-            'X-API-Key': process.env.SERVICE_M8_API_KEY
-   },
+  headers: { Accept: 'application/json', 'X-API-Key': SERVICE_M8_API_KEY },
 });
 
-// Axios instance for GHL
+// Axios instance for GHL (OAuth 2.0)
 const ghlApi = axios.create({
   baseURL: 'https://rest.gohighlevel.com/v1',
-  headers: {
-    Authorization: `Bearer ${GHL_API_KEY}`,
-    Accept: 'application/json',
-  },
+  headers: { Accept: 'application/json' },
+});
+
+// Middleware to add GHL auth header dynamically
+ghlApi.interceptors.request.use(async (config) => {
+  const accessToken = await getAccessToken();
+  config.headers.Authorization = `Bearer ${accessToken}`;
+  return config;
 });
 
 // Store processed UUIDs and queue UUID
 let processedJobs = new Set();
 let processedContacts = new Set();
 let quotesNewQueueUuid = '6bced9d5-c84a-4d47-84bf-22dff884744b';
-const STATE_FILE = 'state.json';
+const STATE_FILE = './state.json';
+const PROCESSED_APPT_FILE = './processed_appointments.json';
 const processedGhlContactIds = new Map();
 
 // Load polling state
@@ -85,32 +195,18 @@ async function saveState(lastPollTimestamp) {
   }
 }
 
-// Fetch ServiceM8 "To Be Quoted (Desk Quote)" queue UUID
-// async function getQuotesNewQueueUuid() {
-//   if (quotesNewQueueUuid) {
-//     console.log('Using cached To Be Quoted (Desk Quote) queue UUID:', quotesNewQueueUuid);
-//     return quotesNewQueueUuid;
-//   }
+// Load processed appointment IDs
+function loadProcessedAppointments() {
+  if (fs.existsSync(PROCESSED_APPT_FILE)) {
+    return new Set(JSON.parse(fs.readFileSync(PROCESSED_APPT_FILE)));
+  }
+  return new Set();
+}
 
-//   try {
-//     const response = await serviceM8Api.get('/queue.json');
-//     const queues = response.data || [];
-//     console.log(`Fetched ${queues.length} queues from ServiceM8`);
-
-//     const queue = queues.find((q) => (q.name || '').toLowerCase().trim() === 'To Be Quoted (Desk Quote)'.toLowerCase().trim());
-//     if (queue) {
-//       quotesNewQueueUuid = queue.uuid;
-//       console.log(`Found "To Be Quoted (Desk Quote)" queue UUID: ${quotesNewQueueUuid}`);
-//       return quotesNewQueueUuid;
-//     }
-
-//     console.error('No "To Be Quoted (Desk Quote)" queue found');
-//     return null;
-//   } catch (error) {
-//     console.error('Error fetching ServiceM8 queues:', error.response ? error.response.data : error.message);
-//     return null;
-//   }
-// }
+// Save processed appointment IDs
+function saveProcessedAppointments(processed) {
+  fs.writeFileSync(PROCESSED_APPT_FILE, JSON.stringify([...processed], null, 2));
+}
 
 // Check new ServiceM8 contacts and sync to GHL
 const checkNewContacts = async () => {
@@ -236,7 +332,6 @@ const checkPaymentStatus = async () => {
     const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
     console.log(`Checking payments edited after ${twentyMinutesAgo} for jobs completed on or after ${targetDate}`);
 
-    // Step 1: Fetch payments edited in the last 20 minutes
     const paymentFilter = `$filter=edit_date gt '${twentyMinutesAgo}'`;
     const paymentsResponse = await serviceM8Api.get(`/jobpayment.json?${paymentFilter}`);
     const payments = paymentsResponse.data;
@@ -247,13 +342,11 @@ const checkPaymentStatus = async () => {
       const jobUuid = payment.job_uuid;
       console.log(`Processing payment ${paymentUuid} for job ${jobUuid}`);
 
-      // Step 2: Skip if payment already processed
       if (processedJobs.has(paymentUuid)) {
         console.log(`Payment ${paymentUuid} already processed, skipping.`);
         continue;
       }
 
-      // Step 3: Fetch job details to check status and edit_date
       let job;
       try {
         const jobResponse = await serviceM8Api.get(`/job.json?$filter=uuid eq '${jobUuid}'`);
@@ -268,13 +361,11 @@ const checkPaymentStatus = async () => {
         continue;
       }
 
-      // Step 4: Check if job is completed
       if (job.status.toLowerCase() !== 'completed') {
         console.log(`Job ${jobUuid} is not completed (status: ${job.status}), skipping payment ${paymentUuid}`);
         continue;
       }
 
-      // Step 5: Fetch job activities to determine completion date
       let completionDate = null;
       try {
         const jobActivitiesResponse = await serviceM8Api.get(`/jobactivity.json?$filter=job_uuid eq '${jobUuid}'`);
@@ -302,7 +393,6 @@ const checkPaymentStatus = async () => {
         console.log(`Failed to fetch activities, using job edit_date as completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
       }
 
-      // Step 6: Check if job was completed on or after May 24, 2025
       if (!completionDate) {
         console.log(`No completion date available for job ${jobUuid}, skipping payment ${paymentUuid}`);
         continue;
@@ -314,7 +404,6 @@ const checkPaymentStatus = async () => {
         continue;
       }
 
-      // Fetch job category
       let categoryName = '';
       if (job.category_uuid) {
         try {
@@ -329,13 +418,12 @@ const checkPaymentStatus = async () => {
         }
       }
 
-      if (categoryName === 'Real Estate Agents') {
+      if (categoryName === 'real estate agents') {
         console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents`);
         processedJobs.add(paymentUuid);
         continue;
       }
 
-      // Step 7: Fetch GHL Contact ID and company_uuid
       let ghlContactId = '';
       if (job.job_description) {
         const ghlContactIdMatch = job.job_description.match(/GHL Contact ID: ([a-zA-Z0-9]+)/);
@@ -348,7 +436,6 @@ const checkPaymentStatus = async () => {
         continue;
       }
 
-      // Step 8: Fetch company contact
       let clientEmail = '';
       try {
         const companyResponse = await serviceM8Api.get('/companycontact.json', {
@@ -362,14 +449,12 @@ const checkPaymentStatus = async () => {
         console.error(`Error fetching contact for company ${companyUuid}:`, error.response ? error.response.data : error.message);
       }
 
-      // Step 9: Check if contact already triggered
       const contactKey = ghlContactId || clientEmail;
       if (contactKey && processedContacts.has(contactKey)) {
         console.log(`Contact ${contactKey} already triggered, skipping payment ${paymentUuid}`);
         continue;
       }
 
-      // Step 10: Check if payment is paid and recent
       if (
         payment.active === 1 &&
         payment.amount > 0 &&
@@ -386,7 +471,7 @@ const checkPaymentStatus = async () => {
         try {
           const webhookResponse = await axios.post(GHL_WEBHOOK_URL, webhookPayload, {
             headers: {
-              Authorization: `Bearer ${GHL_API_KEY}`,
+              Authorization: `Bearer ${await getAccessToken()}`,
               'Content-Type': 'application/json',
             },
           });
@@ -410,7 +495,6 @@ const checkPaymentStatus = async () => {
       }
     }
 
-    // Step 11: Save state
     await saveState(Date.now());
     console.log('Payment status check completed.');
   } catch (error) {
@@ -454,7 +538,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    // Deduplicate based on ghlContactId
     const now = Date.now();
     const lastProcessed = processedGhlContactIds.get(ghlContactId);
     if (lastProcessed && now - lastProcessed < 5000) {
@@ -498,7 +581,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.log(`Client created: ${companyUuid} for email ${email} with phone ${phone}`);
     }
 
-    // Check for existing company contact
     const contactsResponse = await serviceM8Api.get(`/companycontact.json?$filter=company_uuid eq '${companyUuid}'`);
     const existingContacts = contactsResponse.data;
     const matchingContact = existingContacts.find((contact) => {
@@ -508,7 +590,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     });
 
     if (!matchingContact) {
-      // Create company contact only if it doesn't exist
       const companyContactData = {
         company_uuid: companyUuid,
         first: firstName,
@@ -524,16 +605,14 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.log(`Contact already exists for company ${companyUuid}, skipping creation.`);
     }
 
-    // Fetch message from GHL contact
     let message = '';
     try {
       const contactResponse = await ghlApi.get(`/contacts/${ghlContactId}`, {
-        params: { include: 'customFields' }, // Explicitly request custom fields
+        params: { include: 'customFields' },
       });
       const contact = contactResponse.data.contact;
       console.log(`Fetched GHL contact data for ${ghlContactId}:`, JSON.stringify(contact, null, 2));
 
-      // Check for various possible keys for custom fields
       let customFields = contact.customFields || contact.custom_fields || contact.customField || contact.custom_field_values || contact.fields || [];
       if (!Array.isArray(customFields)) {
         console.log(`Custom fields not an array, attempting to convert object:`, customFields);
@@ -541,7 +620,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       }
 
       if (customFields.length > 0) {
-        // Look for the "Message" field (case-sensitive and case-insensitive)
         const messageField = customFields.find(field => 
           (field.name && (field.name === 'Message' || field.name.toLowerCase() === 'message')) ||
           (field.label && (field.label === 'Message' || field.label.toLowerCase() === 'message')) ||
@@ -560,7 +638,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.error('Failed to fetch contact message from GHL (proceeding without message):', error.response ? error.response.data : error.message);
     }
 
-    // Build job description, including message only if available
     const jobDescriptionWithMessage = message
       ? `Enquiry details: ${message}\nGHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`
       : `GHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`;
@@ -568,7 +645,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       company_uuid: companyUuid,
       status: 'Quote',
       queue_uuid: queueUuid,
-      job_address: address, // Set job address field
+      job_address: address,
       job_description: jobDescriptionWithMessage,
     };
 
@@ -576,10 +653,9 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     const jobUuid = jobResponse.headers['x-record-uuid'];
     console.log(`Job created: ${jobUuid} in queue ${queueUuid}`);
 
-    // Create job contact in ServiceM8 with phone/mobile logic
     const jobContactData = {
       job_uuid: jobUuid,
-      type: 'Job Contact', // Required field to specify contact type
+      type: 'Job Contact',
       first: firstName,
       last: lastName,
       email: email,
@@ -590,7 +666,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     await serviceM8Api.post('/jobcontact.json', jobContactData);
     console.log(`Job contact added for job: ${jobUuid}`);
 
-    // Fetch images from GHL /contacts/{id} with fallbacks
     let photoData = [];
     try {
       const contactResponse = await ghlApi.get(`/contacts/${ghlContactId}`);
@@ -643,7 +718,8 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
               });
             }
           }
-        } catch (attachmentError) {
+        } 
+        catch (attachmentError) {
           console.log('Attachments endpoint not available or failed:', attachmentError.response ? attachmentError.response.data : attachmentError.message);
         }
       }
@@ -656,7 +732,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       );
     }
 
-    // Download and upload images to ServiceM8
     for (const photo of photoData) {
       const { url: photoUrl, documentId, filename, mimetype } = photo;
       let tempPath;
@@ -670,7 +745,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
         try {
           downloadResponse = await axios.get(`https://services.leadconnectorhq.com/documents/download/${documentId}`, {
             headers: {
-              Authorization: `Bearer ${GHL_API_KEY}`,
+              Authorization: `Bearer ${await getAccessToken()}`,
             },
             responseType: 'stream',
           });
@@ -679,7 +754,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
           try {
             downloadResponse = await axios.get(photoUrl, {
               headers: {
-                Authorization: `Bearer ${GHL_API_KEY}`,
+                Authorization: `Bearer ${await getAccessToken()}`,
               },
               responseType: 'stream',
             });
@@ -717,7 +792,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
           continue;
         }
 
-        // Create attachment record
         const fileExtension = getFileExtensionFromMime(mimetype);
         const attachmentData = {
           related_object: 'job',
@@ -729,7 +803,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
         attachmentUuid = attachmentResponse.headers['x-record-uuid'];
         console.log(`Created attachment record for job ${jobUuid}, UUID: ${attachmentUuid}, file_type: ${fileExtension}`);
 
-        // Upload the file
         const fileData = await fsPromises.readFile(tempPath);
         await serviceM8Api.put(`/Attachment/${attachmentUuid}.file`, fileData, {
           headers: {
@@ -737,10 +810,6 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
           },
         });
         console.log(`Uploaded file for attachment ${attachmentUuid}`);
-
-        // For verification, skip cleanup temporarily
-        // await fsPromises.unlink(tempPath);
-        // console.log(`Cleaned up temporary file ${tempPath}`);
       } catch (error) {
         console.error(`Error processing image ${filename}:`, error.message);
       }
@@ -751,6 +820,103 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
   } catch (error) {
     console.error('Error creating job:', error.response ? error.response.data : error.message);
     res.status(500).json({ error: 'Failed to create job' });
+  }
+});
+
+// Endpoint to handle GHL webhook for new appointments
+app.post('/ghl-appointment-sync', async (req, res) => {
+  const processedAppointments = loadProcessedAppointments();
+  const { appointment } = req.body;
+
+  if (!appointment || !appointment.id || !appointment.contactId || !appointment.startTime) {
+    console.error('Invalid webhook payload:', req.body);
+    return res.status(400).json({ error: 'Missing appointment data' });
+  }
+
+  const appointmentId = appointment.id;
+  if (processedAppointments.has(appointmentId)) {
+    console.log(`Appointment ${appointmentId} already processed, skipping.`);
+    return res.status(200).json({ message: 'Appointment already synced' });
+  }
+
+  try {
+    let contact;
+    try {
+      const contactResponse = await ghlApi.get(`/contacts/${appointment.contactId}`);
+      contact = contactResponse.data.contact;
+      console.log(`Fetched GHL contact: ${contact.id}, email: ${contact.email}`);
+    } catch (error) {
+      console.error(`Error fetching GHL contact ${appointment.contactId}:`, error.response?.data || error.message);
+      return res.status(500).json({ error: 'Failed to fetch contact details' });
+    }
+
+    const activityData = {
+      staff_uuid: SERVICE_M8_STAFF_UUID,
+      start_date: moment(appointment.startTime).tz('Australia/Brisbane').format('YYYY-MM-DD HH:mm:ss'),
+      end_date: moment(appointment.endTime).tz('Australia/Brisbane').format('YYYY-MM-DD HH:mm:ss'),
+      activity_description: appointment.title || 'GHL Appointment',
+      activity_type: 'Appointment',
+      job_address: appointment.location || contact.address1 || 'No address provided',
+      related_contact_uuid: null,
+    };
+
+    let companyUuid;
+    const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim().toLowerCase();
+    const contactEmail = (contact.email || '').toLowerCase().trim();
+
+    try {
+      const companiesResponse = await serviceM8Api.get('/company.json');
+      const companies = companiesResponse.data;
+      const matchingCompany = companies.find(
+        (c) => c.email.toLowerCase().trim() === contactEmail || c.name.toLowerCase().trim() === contactName
+      );
+
+      if (matchingCompany) {
+        companyUuid = matchingCompany.uuid;
+        console.log(`Found existing ServiceM8 company: ${companyUuid}`);
+      } else {
+        const newCompanyResponse = await serviceM8Api.post('/company.json', { name: contactName || contact.email });
+        companyUuid = newCompanyResponse.headers['x-record-uuid'];
+        console.log(`Created new ServiceM8 company: ${companyUuid}`);
+
+        const companyContactData = {
+          company_uuid: companyUuid,
+          first: contact.firstName || '',
+          last: contact.lastName || '',
+          email: contact.email || '',
+          phone: contact.phone || contact.mobile || '',
+        };
+        await serviceM8Api.post('/companycontact.json', companyContactData);
+        console.log(`Created ServiceM8 contact for company: ${companyUuid}`);
+      }
+
+      const contactsResponse = await serviceM8Api.get(`/companycontact.json?$filter=company_uuid eq '${companyUuid}'`);
+      const matchingContact = contactsResponse.data.find(
+        (c) => c.email.toLowerCase().trim() === contactEmail
+      );
+      if (matchingContact) {
+        activityData.related_contact_uuid = matchingContact.uuid;
+      }
+    } catch (error) {
+      console.error('Error syncing ServiceM8 contact:', error.response?.data || error.message);
+    }
+
+    try {
+      const response = await serviceM8Api.post('/jobactivity.json', activityData);
+      const activityUuid = response.headers['x-record-uuid'];
+      console.log(`Created ServiceM8 job activity: ${activityUuid} for appointment ${appointmentId}`);
+
+      processedAppointments.add(appointmentId);
+      saveProcessedAppointments(processedAppointments);
+
+      res.status(200).json({ message: 'Appointment synced', activityUuid });
+    } catch (error) {
+      console.error('Error creating ServiceM8 job activity:', error.response?.data || error.message);
+      res.status(500).json({ error: 'Failed to sync appointment' });
+    }
+  } catch (error) {
+    console.error('Webhook error:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
 
@@ -779,5 +945,6 @@ cron.schedule('*/2880 * * * *', () => {
 });
 
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
+  console.log(`👉 Visit http://localhost:${PORT}/auth to start OAuth flow`);
 });
