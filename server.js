@@ -718,8 +718,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
               });
             }
           }
-        } 
-        catch (attachmentError) {
+        } catch (attachmentError) {
           console.log('Attachments endpoint not available or failed:', attachmentError.response ? attachmentError.response.data : attachmentError.message);
         }
       }
@@ -826,7 +825,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
 // Endpoint to handle GHL webhook for new appointments
 app.post('/ghl-appointment-sync', async (req, res) => {
   const processedAppointments = loadProcessedAppointments();
-  const { appointment } = req.body;
+  const appointment = req.body; // Flat payload: { id, contactId, startTime, endTime, title, location }
 
   if (!appointment || !appointment.id || !appointment.contactId || !appointment.startTime) {
     console.error('Invalid webhook payload:', req.body);
@@ -840,6 +839,15 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
+    // Parse GHL's non-standard date format
+    const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    if (!startTime.isValid() || !endTime.isValid()) {
+      console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
+      return res.status(400).json({ error: 'Invalid date format' });
+    }
+
+    // Fetch contact details from GHL
     let contact;
     try {
       const contactResponse = await ghlApi.get(`/contacts/${appointment.contactId}`);
@@ -850,16 +858,18 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch contact details' });
     }
 
+    // Map GHL appointment to ServiceM8 job activity
     const activityData = {
       staff_uuid: SERVICE_M8_STAFF_UUID,
-      start_date: moment(appointment.startTime).tz('Australia/Brisbane').format('YYYY-MM-DD HH:mm:ss'),
-      end_date: moment(appointment.endTime).tz('Australia/Brisbane').format('YYYY-MM-DD HH:mm:ss'),
+      start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
+      end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
       activity_description: appointment.title || 'GHL Appointment',
       activity_type: 'Appointment',
       job_address: appointment.location || contact.address1 || 'No address provided',
       related_contact_uuid: null,
     };
 
+    // Find or create ServiceM8 contact
     let companyUuid;
     const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim().toLowerCase();
     const contactEmail = (contact.email || '').toLowerCase().trim();
@@ -901,6 +911,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       console.error('Error syncing ServiceM8 contact:', error.response?.data || error.message);
     }
 
+    // Create ServiceM8 job activity
     try {
       const response = await serviceM8Api.post('/jobactivity.json', activityData);
       const activityUuid = response.headers['x-record-uuid'];
