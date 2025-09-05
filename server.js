@@ -8,6 +8,7 @@ const moment = require('moment-timezone');
 const multer = require('multer');
 const FormData = require('form-data');
 const path = require('path');
+const { execSync } = require('child_process');
 
 dotenv.config();
 
@@ -35,18 +36,25 @@ fsPromises.mkdir(UPLOADS_DIR, { recursive: true }).catch((error) => {
   console.error('Error creating uploads directory:', error.message);
 });
 
-// File-based token storage
-const TOKEN_FILE = './tokens.json';
-
-// Utility: Save tokens
+// Utility: Save tokens to Heroku config vars
 function saveTokens(tokens) {
-  fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+  try {
+    execSync(`heroku config:set GHL_ACCESS_TOKEN=${tokens.access_token} GHL_REFRESH_TOKEN=${tokens.refresh_token} GHL_TOKEN_CREATED_AT=${tokens.created_at} GHL_TOKEN_EXPIRES_IN=${tokens.expires_in} --app assurefixinteg-8a33dda2d6df`);
+    console.log('Tokens saved to Heroku config vars');
+  } catch (error) {
+    console.error('Error saving tokens to Heroku config vars:', error.message);
+  }
 }
 
-// Utility: Load tokens
+// Utility: Load tokens from Heroku config vars
 function loadTokens() {
-  if (fs.existsSync(TOKEN_FILE)) {
-    return JSON.parse(fs.readFileSync(TOKEN_FILE));
+  if (process.env.GHL_ACCESS_TOKEN && process.env.GHL_REFRESH_TOKEN) {
+    return {
+      access_token: process.env.GHL_ACCESS_TOKEN,
+      refresh_token: process.env.GHL_REFRESH_TOKEN,
+      created_at: parseInt(process.env.GHL_TOKEN_CREATED_AT) || Math.floor(Date.now() / 1000),
+      expires_in: parseInt(process.env.GHL_TOKEN_EXPIRES_IN) || 3600,
+    };
   }
   return null;
 }
@@ -151,6 +159,7 @@ const ghlApi = axios.create({
 // Middleware to add GHL auth header dynamically
 ghlApi.interceptors.request.use(async (config) => {
   const accessToken = await getAccessToken();
+  console.log('Using GHL access token:', accessToken.substring(0, 20) + '...');
   config.headers.Authorization = `Bearer ${accessToken}`;
   return config;
 });
@@ -825,7 +834,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
 // Endpoint to handle GHL webhook for new appointments
 app.post('/ghl-appointment-sync', async (req, res) => {
   const processedAppointments = loadProcessedAppointments();
-  const appointment = req.body; // Flat payload: { id, contactId, startTime, endTime, title, location }
+  const appointment = req.body;
 
   if (!appointment || !appointment.id || !appointment.contactId || !appointment.startTime) {
     console.error('Invalid webhook payload:', req.body);
@@ -839,7 +848,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
-    // Parse GHL's non-standard date format
     const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
     const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
     if (!startTime.isValid() || !endTime.isValid()) {
@@ -847,7 +855,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(400).json({ error: 'Invalid date format' });
     }
 
-    // Fetch contact details from GHL
     let contact;
     try {
       const contactResponse = await ghlApi.get(`/contacts/${appointment.contactId}`);
@@ -858,7 +865,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch contact details' });
     }
 
-    // Map GHL appointment to ServiceM8 job activity
     const activityData = {
       staff_uuid: SERVICE_M8_STAFF_UUID,
       start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
@@ -869,7 +875,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       related_contact_uuid: null,
     };
 
-    // Find or create ServiceM8 contact
     let companyUuid;
     const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim().toLowerCase();
     const contactEmail = (contact.email || '').toLowerCase().trim();
@@ -911,7 +916,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       console.error('Error syncing ServiceM8 contact:', error.response?.data || error.message);
     }
 
-    // Create ServiceM8 job activity
     try {
       const response = await serviceM8Api.post('/jobactivity.json', activityData);
       const activityUuid = response.headers['x-record-uuid'];
@@ -942,6 +946,17 @@ app.get('/test-contact-check', async (req, res) => {
   console.log('Triggering test contact check...');
   await checkNewContacts();
   res.send('Contact check triggered');
+});
+
+app.get('/test-contact/:id', async (req, res) => {
+  try {
+    const contactId = req.params.id;
+    const response = await ghlApi.get(`/contacts/${contactId}`);
+    res.json(response.data);
+  } catch (error) {
+    console.error('Test contact fetch error:', error.response?.data || error.message);
+    res.status(500).json({ error: error.response?.data || error.message });
+  }
 });
 
 // Schedule polling
