@@ -889,7 +889,9 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       const companiesResponse = await serviceM8Api.get('/company.json');
       const companies = companiesResponse.data;
       const matchingCompany = companies.find(
-        (c) => c.email.toLowerCase().trim() === contactEmail || c.name.toLowerCase().trim() === contactName
+        (c) =>
+          (c.email ? c.email.toLowerCase().trim() : '') === contactEmail ||
+          (c.name ? c.name.toLowerCase().trim() : '') === contactName
       );
 
       if (matchingCompany) {
@@ -897,7 +899,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         console.log(`Found existing ServiceM8 company: ${companyUuid}`);
       } else {
         const newCompanyResponse = await serviceM8Api.post('/company.json', {
-          name: contactName || contact.email,
+          name: contactName || contact.email || 'Unknown Contact',
           email: contact.email || '',
         });
         companyUuid = newCompanyResponse.headers['x-record-uuid'];
@@ -925,7 +927,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
       const contactsResponse = await serviceM8Api.get(`/companycontact.json?$filter=company_uuid eq '${companyUuid}'`);
       const matchingContact = contactsResponse.data.find(
-        (c) => c.email.toLowerCase().trim() === contactEmail
+        (c) => (c.email ? c.email.toLowerCase().trim() : '') === contactEmail
       );
       const relatedContactUuid = matchingContact ? matchingContact.uuid : null;
 
@@ -970,13 +972,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     return res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
-// Temporary endpoints for testing
-app.get('/test-payment-check', async (req, res) => {
-  console.log('Triggering test payment check...');
-  await checkPaymentStatus();
-  res.send('Payment check triggered');
-});
-
 app.get('/test-contact-check', async (req, res) => {
   console.log('Triggering test contact check...');
   await checkNewContacts();
