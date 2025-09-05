@@ -873,7 +873,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     try {
       const contactResponse = await ghlApi.get(`/contacts/${appointment.contactId}`);
       contact = contactResponse.data.contact;
-      console.log(`Fetched GHL contact: ${contact.id}, email: ${contact.email}`);
+      console.log(`Fetched GHL contact: ${contact.id}, email: ${contact.email}, locationId: ${contact.locationId}`);
     } catch (error) {
       console.error(`Error fetching GHL contact ${appointment.contactId}:`, error.response?.data || error.message);
       return res.status(500).json({ error: 'Failed to fetch contact details' });
@@ -948,7 +948,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
-
 // Temporary endpoints for testing
 app.get('/test-payment-check', async (req, res) => {
   console.log('Triggering test payment check...');
