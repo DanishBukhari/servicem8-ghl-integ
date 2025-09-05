@@ -881,10 +881,13 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch contact details' });
     }
 
-    let companyUuid;
-    const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim().toLowerCase();
+    // Capitalize first letters of name
+    const firstName = contact.firstName ? contact.firstName.charAt(0).toUpperCase() + contact.firstName.slice(1).toLowerCase() : '';
+    const lastName = contact.lastName ? contact.lastName.charAt(0).toUpperCase() + contact.lastName.slice(1).toLowerCase() : '';
+    const contactName = `${firstName} ${lastName}`.trim().toLowerCase();
     const contactEmail = (contact.email || '').toLowerCase().trim();
 
+    let companyUuid;
     try {
       const companiesResponse = await serviceM8Api.get('/company.json');
       const companies = companiesResponse.data;
@@ -899,7 +902,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         console.log(`Found existing ServiceM8 company: ${companyUuid}`);
       } else {
         const newCompanyResponse = await serviceM8Api.post('/company.json', {
-          name: contactName || contact.email || 'Unknown Contact',
+          name: `${firstName} ${lastName}`.trim() || contact.email || 'Unknown Contact',
           email: contact.email || '',
         });
         companyUuid = newCompanyResponse.headers['x-record-uuid'];
@@ -907,8 +910,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
         const companyContactData = {
           company_uuid: companyUuid,
-          first: contact.firstName || '',
-          last: contact.lastName || '',
+          first: firstName,
+          last: lastName,
           email: contact.email || '',
         };
         if (contact.phone || contact.mobile) {
@@ -924,37 +927,98 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         await serviceM8Api.post('/companycontact.json', companyContactData);
         console.log(`Created ServiceM8 contact for company: ${companyUuid}`);
       }
+    } catch (error) {
+      console.error('Error syncing ServiceM8 contact:', error.response?.data || error.message);
+      return res.status(500).json({ error: 'Failed to sync contact' });
+    }
 
-      const contactsResponse = await serviceM8Api.get(`/companycontact.json?$filter=company_uuid eq '${companyUuid}'`);
-      const matchingContact = contactsResponse.data.find(
-        (c) => (c.email ? c.email.toLowerCase().trim() : '') === contactEmail
-      );
-      const relatedContactUuid = matchingContact ? matchingContact.uuid : null;
-
-      // Create a job in ServiceM8
-      const jobData = {
-        company_uuid: companyUuid,
-        status: 'Quote',
-        queue_uuid: '80e5981d-e2fb-470b-9577-23231dab715b',
-        job_address: appointment.location || contact.address1 || 'No address provided',
-        job_description: appointment.title || 'GHL Appointment',
-      };
+    // Create a job in ServiceM8
+    const jobData = {
+      company_uuid: companyUuid,
+      status: 'Quote',
+      queue_uuid: '80e5981d-e2fb-470b-9577-23231dab715b',
+      job_address: appointment.location || contact.address1 || 'No address provided',
+      job_description: appointment.title || 'GHL Appointment',
+    };
+    let jobUuid;
+    try {
       const jobResponse = await serviceM8Api.post('/job.json', jobData);
-      const jobUuid = jobResponse.headers['x-record-uuid'];
+      jobUuid = jobResponse.headers['x-record-uuid'];
       console.log(`Created ServiceM8 job: ${jobUuid}`);
+    } catch (error) {
+      console.error('Error creating ServiceM8 job:', error.response?.data || error.message);
+      return res.status(500).json({ error: 'Failed to create job' });
+    }
 
-      // Create job activity
-      const activityData = {
-        job_uuid: jobUuid,
-        staff_uuid: SERVICE_M8_STAFF_UUID,
-        start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
-        end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
-        activity_description: appointment.title || 'GHL Appointment',
-        activity_type: 'Appointment',
-        job_address: appointment.location || contact.address1 || 'No address provided',
-        related_contact_uuid: relatedContactUuid,
-      };
+    // Add job contact to ServiceM8
+    const jobContactData = {
+      job_uuid: jobUuid,
+      type: 'Job Contact',
+      first: firstName,
+      last: lastName,
+      email: contact.email || '',
+    };
+    if (contact.phone || contact.mobile) {
+      const phoneNumber = contact.phone || contact.mobile;
+      if (phoneNumber.startsWith('04')) {
+        jobContactData.mobile = phoneNumber;
+        jobContactData.phone = '';
+      } else {
+        jobContactData.phone = phoneNumber;
+        jobContactData.mobile = '';
+      }
+    }
+    try {
+      await serviceM8Api.post('/jobcontact.json', jobContactData);
+      console.log(`Added job contact to ServiceM8 job: ${jobUuid}`);
+    } catch (error) {
+      console.error('Error adding job contact to ServiceM8:', error.response?.data || error.message);
+      // Continue even if this fails, as it's non-critical
+    }
 
+    // Hardcoded staff UUIDs
+    const sebastianUuid = '431dbebf-23ff-477a-9559-1fab55a816bb';
+    const tamsinUuid = '979f57c6-cfe4-4ef5-b002-208f2994fa8b';
+
+    // Function to check staff availability
+    const isStaffAvailable = async (staffUuid) => {
+      try {
+        const filter = `$filter=staff_uuid eq '${staffUuid}' and start_date le '${endTime.format('YYYY-MM-DD HH:mm:ss')}' and end_date ge '${startTime.format('YYYY-MM-DD HH:mm:ss')}'`;
+        const activitiesResponse = await serviceM8Api.get(`/jobactivity.json?${filter}`);
+        const activities = activitiesResponse.data;
+        return activities.length === 0; // Available if no overlapping activities
+      } catch (error) {
+        console.error(`Error checking availability for staff ${staffUuid}:`, error.response?.data || error.message);
+        return false; // Assume unavailable on error
+      }
+    };
+
+    // Check availability
+    let selectedStaffUuid = null;
+    if (await isStaffAvailable(sebastianUuid)) {
+      selectedStaffUuid = sebastianUuid;
+      console.log('Sebastian is available, booking with him.');
+    } else if (await isStaffAvailable(tamsinUuid)) {
+      selectedStaffUuid = tamsinUuid;
+      console.log('Sebastian is not available, but Tamsin is, booking with her.');
+    } else {
+      console.log('Neither Sebastian nor Tamsin is available.');
+      return res.status(200).json({ message: 'No available slot in ServiceM8' });
+    }
+
+    // Create job activity with selected staff
+    const activityData = {
+      job_uuid: jobUuid,
+      staff_uuid: selectedStaffUuid,
+      start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
+      end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
+      activity_description: appointment.title || 'GHL Appointment',
+      activity_type: 'Appointment',
+      job_address: appointment.location || contact.address1 || 'No address provided',
+      related_contact_uuid: null,
+    };
+
+    try {
       const response = await serviceM8Api.post('/jobactivity.json', activityData);
       const activityUuid = response.headers['x-record-uuid'];
       console.log(`Created ServiceM8 job activity: ${activityUuid} for appointment ${appointmentId}`);
@@ -964,14 +1028,15 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
       res.status(200).json({ message: 'Appointment synced', jobUuid, activityUuid });
     } catch (error) {
-      console.error('Error creating ServiceM8 job or activity:', error.response?.data || error.message);
-      return res.status(500).json({ error: 'Failed to sync appointment' });
+      console.error('Error creating ServiceM8 job activity:', error.response?.data || error.message);
+      res.status(500).json({ error: 'Failed to sync appointment' });
     }
   } catch (error) {
     console.error('Webhook error:', error.response?.data || error.message);
-    return res.status(500).json({ error: 'Failed to process webhook' });
+    res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
+
 app.get('/test-contact-check', async (req, res) => {
   console.log('Triggering test contact check...');
   await checkNewContacts();
