@@ -167,8 +167,9 @@ const serviceM8Api = axios.create({
 // Axios instance for GHL (OAuth 2.0)
 const ghlApi = axios.create({
   baseURL: 'https://services.leadconnectorhq.com',
-  headers: { Accept: 'application/json' },
-  version: '2021-04-15'
+  headers: { Accept: 'application/json',
+             Version: '2021-04-15' }
+   
 });
 
 // Middleware to add GHL auth header dynamically
