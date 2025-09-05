@@ -166,7 +166,7 @@ const serviceM8Api = axios.create({
 
 // Axios instance for GHL (OAuth 2.0)
 const ghlApi = axios.create({
-  baseURL: 'https://rest.gohighlevel.com/v1',
+  baseURL: 'https://services.leadconnectorhq.com',
   headers: { Accept: 'application/json' },
 });
 
