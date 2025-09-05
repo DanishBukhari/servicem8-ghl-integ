@@ -881,16 +881,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch contact details' });
     }
 
-    const activityData = {
-      staff_uuid: SERVICE_M8_STAFF_UUID,
-      start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
-      end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
-      activity_description: appointment.title || 'GHL Appointment',
-      activity_type: 'Appointment',
-      job_address: appointment.location || contact.address1 || 'No address provided',
-      related_contact_uuid: null,
-    };
-
     let companyUuid;
     const contactName = `${contact.firstName || ''} ${contact.lastName || ''}`.trim().toLowerCase();
     const contactEmail = (contact.email || '').toLowerCase().trim();
@@ -906,7 +896,10 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         companyUuid = matchingCompany.uuid;
         console.log(`Found existing ServiceM8 company: ${companyUuid}`);
       } else {
-        const newCompanyResponse = await serviceM8Api.post('/company.json', { name: contactName || contact.email });
+        const newCompanyResponse = await serviceM8Api.post('/company.json', {
+          name: contactName || contact.email,
+          email: contact.email || '',
+        });
         companyUuid = newCompanyResponse.headers['x-record-uuid'];
         console.log(`Created new ServiceM8 company: ${companyUuid}`);
 
@@ -915,8 +908,17 @@ app.post('/ghl-appointment-sync', async (req, res) => {
           first: contact.firstName || '',
           last: contact.lastName || '',
           email: contact.email || '',
-          phone: contact.phone || contact.mobile || '',
         };
+        if (contact.phone || contact.mobile) {
+          const phoneNumber = contact.phone || contact.mobile;
+          if (phoneNumber.startsWith('04')) {
+            companyContactData.mobile = phoneNumber;
+            companyContactData.phone = '';
+          } else {
+            companyContactData.phone = phoneNumber;
+            companyContactData.mobile = '';
+          }
+        }
         await serviceM8Api.post('/companycontact.json', companyContactData);
         console.log(`Created ServiceM8 contact for company: ${companyUuid}`);
       }
@@ -925,14 +927,32 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       const matchingContact = contactsResponse.data.find(
         (c) => c.email.toLowerCase().trim() === contactEmail
       );
-      if (matchingContact) {
-        activityData.related_contact_uuid = matchingContact.uuid;
-      }
-    } catch (error) {
-      console.error('Error syncing ServiceM8 contact:', error.response?.data || error.message);
-    }
+      const relatedContactUuid = matchingContact ? matchingContact.uuid : null;
 
-    try {
+      // Create a job in ServiceM8
+      const jobData = {
+        company_uuid: companyUuid,
+        status: 'Quote',
+        queue_uuid: '80e5981d-e2fb-470b-9577-23231dab715b',
+        job_address: appointment.location || contact.address1 || 'No address provided',
+        job_description: appointment.title || 'GHL Appointment',
+      };
+      const jobResponse = await serviceM8Api.post('/job.json', jobData);
+      const jobUuid = jobResponse.headers['x-record-uuid'];
+      console.log(`Created ServiceM8 job: ${jobUuid}`);
+
+      // Create job activity
+      const activityData = {
+        job_uuid: jobUuid,
+        staff_uuid: SERVICE_M8_STAFF_UUID,
+        start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
+        end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
+        activity_description: appointment.title || 'GHL Appointment',
+        activity_type: 'Appointment',
+        job_address: appointment.location || contact.address1 || 'No address provided',
+        related_contact_uuid: relatedContactUuid,
+      };
+
       const response = await serviceM8Api.post('/jobactivity.json', activityData);
       const activityUuid = response.headers['x-record-uuid'];
       console.log(`Created ServiceM8 job activity: ${activityUuid} for appointment ${appointmentId}`);
@@ -940,14 +960,14 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       processedAppointments.add(appointmentId);
       saveProcessedAppointments(processedAppointments);
 
-      res.status(200).json({ message: 'Appointment synced', activityUuid });
+      res.status(200).json({ message: 'Appointment synced', jobUuid, activityUuid });
     } catch (error) {
-      console.error('Error creating ServiceM8 job activity:', error.response?.data || error.message);
-      res.status(500).json({ error: 'Failed to sync appointment' });
+      console.error('Error creating ServiceM8 job or activity:', error.response?.data || error.message);
+      return res.status(500).json({ error: 'Failed to sync appointment' });
     }
   } catch (error) {
     console.error('Webhook error:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to process webhook' });
+    return res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
 // Temporary endpoints for testing
