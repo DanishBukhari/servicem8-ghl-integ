@@ -23,7 +23,6 @@ const PORT = process.env.PORT || 3000;
 const CLIENT_ID = process.env.GHL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GHL_CLIENT_SECRET;
 const REDIRECT_URI = process.env.GHL_REDIRECT_URI || `http://localhost:${PORT}/callback`;
-const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
 
 // ServiceM8 credentials
 const SERVICE_M8_API_KEY = process.env.SERVICE_M8_API_KEY;
@@ -36,34 +35,27 @@ fsPromises.mkdir(UPLOADS_DIR, { recursive: true }).catch((error) => {
   console.error('Error creating uploads directory:', error.message);
 });
 
-// Utility: Save tokens to Heroku config vars using Platform API
-async function saveTokens(tokens) {
+// File-based token storage
+const TOKEN_FILE = './tokens.json';
+
+// Utility: Save tokens to file
+function saveTokens(tokens) {
   try {
-    await axios.patch(
-      'https://api.heroku.com/apps/assurefixinteg-8a33dda2d6df/config-vars',
-      {
-        GHL_ACCESS_TOKEN: tokens.access_token,
-        GHL_REFRESH_TOKEN: tokens.refresh_token,
-        GHL_TOKEN_CREATED_AT: tokens.created_at.toString(),
-        GHL_TOKEN_EXPIRES_IN: tokens.expires_in.toString(),
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${HEROKU_API_KEY}`,
-          Accept: 'application/vnd.heroku+json; version=3',
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-    console.log('Tokens saved to Heroku config vars');
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+    console.log('Tokens saved to tokens.json:', {
+      access_token: tokens.access_token.substring(0, 20) + '...',
+      refresh_token: tokens.refresh_token.substring(0, 20) + '...',
+      created_at: tokens.created_at,
+      expires_in: tokens.expires_in,
+    });
   } catch (error) {
-    console.error('Error saving tokens to Heroku config vars:', error.response?.data || error.message);
-    throw error;
+    console.error('Error saving tokens to file:', error.message);
   }
 }
 
-// Utility: Load tokens from Heroku config vars
+// Utility: Load tokens from file or config vars
 function loadTokens() {
+  // Prefer config vars if available
   if (process.env.GHL_ACCESS_TOKEN && process.env.GHL_REFRESH_TOKEN) {
     console.log('Loading tokens from Heroku config vars');
     return {
@@ -73,7 +65,11 @@ function loadTokens() {
       expires_in: parseInt(process.env.GHL_TOKEN_EXPIRES_IN) || 3600,
     };
   }
-  console.log('No tokens found in config vars');
+  // Fallback to file
+  if (fs.existsSync(TOKEN_FILE)) {
+    console.log('Loading tokens from tokens.json');
+    return JSON.parse(fs.readFileSync(TOKEN_FILE));
+  }
   return null;
 }
 
@@ -112,9 +108,9 @@ app.get('/callback', async (req, res) => {
       created_at: Math.floor(Date.now() / 1000),
     };
 
-    await saveTokens(tokens);
+    saveTokens(tokens);
 
-    res.send('✅ Tokens saved to Heroku config vars! You can now use the API.');
+    res.send('✅ Tokens saved! Copy the tokens from logs and set as Heroku config vars using: heroku config:set GHL_ACCESS_TOKEN=... GHL_REFRESH_TOKEN=... GHL_TOKEN_CREATED_AT=... GHL_TOKEN_EXPIRES_IN=... --app assurefixinteg-8a33dda2d6df');
   } catch (err) {
     console.error('Token exchange error:', err.response?.data || err.message);
     res.status(500).send('Failed to exchange code for tokens.');
@@ -156,7 +152,7 @@ async function getAccessToken() {
       created_at: Math.floor(Date.now() / 1000),
     };
 
-    await saveTokens(tokens);
+    saveTokens(tokens);
   }
 
   return tokens.access_token;
