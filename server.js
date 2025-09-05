@@ -43,8 +43,8 @@ function saveTokens(tokens) {
   try {
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
     console.log('Tokens saved to tokens.json:', {
-      access_token: tokens.access_token.substring(0, 20) + '...',
-      refresh_token: tokens.refresh_token.substring(0, 20) + '...',
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
       created_at: tokens.created_at,
       expires_in: tokens.expires_in,
     });
