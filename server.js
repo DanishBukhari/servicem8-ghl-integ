@@ -1036,6 +1036,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       activity_type: 'Appointment',
       job_address: appointment.location || contact.address1 || 'No address provided',
       related_contact_uuid: null,
+      active: 1,
+      activity_was_scheduled: true
     };
 
     try {
