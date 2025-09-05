@@ -983,10 +983,29 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     // Function to check staff availability
     const isStaffAvailable = async (staffUuid) => {
       try {
-        const filter = `$filter=staff_uuid eq '${staffUuid}' and start_date le '${endTime.format('YYYY-MM-DD HH:mm:ss')}' and end_date ge '${startTime.format('YYYY-MM-DD HH:mm:ss')}'`;
+        // Fetch activities for the staff on the appointment date
+        const startOfDay = startTime.clone().startOf('day').format('YYYY-MM-DD HH:mm:ss');
+        const endOfDay = startTime.clone().endOf('day').format('YYYY-MM-DD HH:mm:ss');
+        const filter = `$filter=staff_uuid eq '${staffUuid}' and start_date ge '${startOfDay}' and end_date le '${endOfDay}'`;
         const activitiesResponse = await serviceM8Api.get(`/jobactivity.json?${filter}`);
         const activities = activitiesResponse.data;
-        return activities.length === 0; // Available if no overlapping activities
+
+        console.log(`Fetched ${activities.length} activities for staff ${staffUuid} on ${startOfDay}`);
+
+        // Check for overlapping activities
+        for (const activity of activities) {
+          const activityStart = moment(activity.start_date).tz('Australia/Brisbane');
+          const activityEnd = moment(activity.end_date).tz('Australia/Brisbane');
+          if (
+            startTime.isBetween(activityStart, activityEnd, undefined, '[)') ||
+            endTime.isBetween(activityStart, activityEnd, undefined, '(]') ||
+            (startTime.isSameOrBefore(activityStart) && endTime.isSameOrAfter(activityEnd))
+          ) {
+            console.log(`Overlap found for staff ${staffUuid}: ${activity.start_date} - ${activity.end_date}`);
+            return false; // Overlap found, staff is unavailable
+          }
+        }
+        return true; // No overlaps, staff is available
       } catch (error) {
         console.error(`Error checking availability for staff ${staffUuid}:`, error.response?.data || error.message);
         return false; // Assume unavailable on error
@@ -1029,14 +1048,13 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       res.status(200).json({ message: 'Appointment synced', jobUuid, activityUuid });
     } catch (error) {
       console.error('Error creating ServiceM8 job activity:', error.response?.data || error.message);
-      res.status(500).json({ error: 'Failed to sync appointment' });
+      return res.status(500).json({ error: 'Failed to sync appointment' });
     }
   } catch (error) {
     console.error('Webhook error:', error.response?.data || error.message);
-    res.status(500).json({ error: 'Failed to process webhook' });
+    return res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
-
 app.get('/test-contact-check', async (req, res) => {
   console.log('Triggering test contact check...');
   await checkNewContacts();
