@@ -168,6 +168,7 @@ const serviceM8Api = axios.create({
 const ghlApi = axios.create({
   baseURL: 'https://services.leadconnectorhq.com',
   headers: { Accept: 'application/json' },
+  version: '2021-04-15'
 });
 
 // Middleware to add GHL auth header dynamically
