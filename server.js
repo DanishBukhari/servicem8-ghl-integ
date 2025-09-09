@@ -870,9 +870,9 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
-    const startTime = (appointment.startTime, 'dddd, MMMM D, YYYY h:mm A')
-    const endTime = (appointment.endTime, 'dddd, MMMM D, YYYY h:mm A')
-    if (!startTime || !endTime) {
+    const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    if (!startTime.isValid() || !endTime.isValid()) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
     }
@@ -983,10 +983,10 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
         console.log(`Fetched ${activities.length} activities for staff ${staffUuid}`);
 
-        const appointmentDate = startTime;
+        const appointmentDate = startTime.clone().startOf('day');
         for (const activity of activities) {
-          const activityStart = (activity.start_date)
-          const activityEnd = (activity.end_date)
+          const activityStart = moment(activity.start_date).tz('Australia/Brisbane');
+          const activityEnd = moment(activity.end_date).tz('Australia/Brisbane');
           if (activityStart.isSame(appointmentDate, 'day')) {
             if (
               startTime.isBetween(activityStart, activityEnd, undefined, '[)') ||
@@ -1022,8 +1022,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     const activityData = {
       job_uuid: jobUuid,
       staff_uuid: selectedStaffUuid,
-      start_date: startTime.format('DD-MM-YYYY HH:mm:ss'),
-      end_date: endTime.format('DD-MM-YYYY HH:mm:ss'),
+      start_date: startTime.format('YYYY-MM-DD HH:mm:ss'),
+      end_date: endTime.format('YYYY-MM-DD HH:mm:ss'),
       activity_description: `${appointment.title || 'GHL Appointment'}\nIssue: ${appointment.issue || 'Not specified'}`,
       activity_type: 'Appointment',
       job_address: appointment.location || contact.address1 || 'No address provided',
