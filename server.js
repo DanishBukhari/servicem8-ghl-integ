@@ -983,7 +983,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
         console.log(`Fetched ${activities.length} activities for staff ${staffUuid}`);
 
-        const appointmentDate = startTime.clone().startOf('day');
+        const appointmentDate = startTime;
         for (const activity of activities) {
           const activityStart = (activity.start_date)
           const activityEnd = (activity.end_date)
