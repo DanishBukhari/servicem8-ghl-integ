@@ -1064,6 +1064,13 @@ app.get('/test-contact-check', async (req, res) => {
   res.send('Contact check triggered');
 });
 
+// Temporary endpoints for testing
+app.get('/test-payment-check', async (req, res) => {
+  console.log('Triggering test payment check...');
+  await checkPaymentStatus();
+  res.send('Payment check triggered');
+});
+
 app.get('/test-contact/:id', async (req, res) => {
   try {
     const contactId = req.params.id;
