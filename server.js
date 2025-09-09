@@ -872,7 +872,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   try {
     const startTime = (appointment.startTime, 'dddd, MMMM D, YYYY h:mm A')
     const endTime = (appointment.endTime, 'dddd, MMMM D, YYYY h:mm A')
-    if (!startTime.isValid() || !endTime.isValid()) {
+    if (!startTime || !endTime) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
     }
