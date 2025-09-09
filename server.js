@@ -360,6 +360,8 @@ const checkNewContacts = async () => {
 const checkPaymentStatus = async () => {
   try {
     console.log('Starting payment status check...');
+    const currentTimestamp = Date.now();
+
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
     const twentyMinutesAgo = now.clone().subtract(20, 'minutes').format('YYYY-MM-DD HH:mm:ss');
