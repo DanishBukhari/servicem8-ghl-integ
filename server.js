@@ -870,8 +870,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
-    const startTime = moment(appointment.startTime, 'dddd, D MMMM, YYYY h:mm A').tz('Australia/Brisbane');
-    const endTime = moment(appointment.endTime, 'dddd, D MMMM, YYYY h:mm A').tz('Australia/Brisbane');
+    const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
     if (!startTime.isValid() || !endTime.isValid()) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
