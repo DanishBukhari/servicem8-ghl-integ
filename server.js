@@ -870,8 +870,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
-    const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
-    const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    const startTime = (appointment.startTime, 'dddd, MMMM D, YYYY h:mm A')
+    const endTime = (appointment.endTime, 'dddd, MMMM D, YYYY h:mm A')
     if (!startTime.isValid() || !endTime.isValid()) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
@@ -985,8 +985,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
         const appointmentDate = startTime.clone().startOf('day');
         for (const activity of activities) {
-          const activityStart = moment(activity.start_date).tz('Australia/Brisbane');
-          const activityEnd = moment(activity.end_date).tz('Australia/Brisbane');
+          const activityStart = (activity.start_date)
+          const activityEnd = (activity.end_date)
           if (activityStart.isSame(appointmentDate, 'day')) {
             if (
               startTime.isBetween(activityStart, activityEnd, undefined, '[)') ||
