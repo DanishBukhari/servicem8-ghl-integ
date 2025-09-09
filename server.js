@@ -869,13 +869,55 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     return res.status(200).json({ message: 'Appointment already synced' });
   }
 
+  // Helper: robust parsing into Brisbane moment
+  function parseToBrisbane(timeValue) {
+    if (!timeValue) return null;
+
+    // If it's an ISO-like string with timezone offset (e.g. 2025-09-11T07:00:00Z or +10:00)
+    if (typeof timeValue === 'string' && /\d{4}-\d{2}-\d{2}T/.test(timeValue)) {
+      // preserve offset then convert to Brisbane local time
+      const m = moment.parseZone(timeValue);
+      return m.isValid() ? m.tz('Australia/Brisbane') : null;
+    }
+
+    // If it's a numeric epoch (ms)
+    if (!isNaN(Number(timeValue))) {
+      const m = moment.tz(Number(timeValue), 'Australia/Brisbane');
+      return m.isValid() ? m : null;
+    }
+
+    // If it's a human readable string like "Thursday, September 11, 2025 7:00 AM"
+    const knownFormat = 'dddd, MMMM D, YYYY h:mm A';
+    const mFormatted = moment.tz(timeValue, knownFormat, 'Australia/Brisbane');
+    if (mFormatted.isValid()) return mFormatted;
+
+    // Last resort: try parseZone then convert
+    const fallback = moment.parseZone(timeValue);
+    if (fallback.isValid()) return fallback.tz('Australia/Brisbane');
+
+    // invalid
+    return null;
+  }
+
   try {
-    const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
-    const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
-    if (!startTime.isValid() || !endTime.isValid()) {
+    // DEBUG: log raw incoming values
+    console.log('RAW incoming startTime:', appointment.startTime);
+    console.log('RAW incoming endTime:', appointment.endTime);
+
+    // Parse times to Brisbane properly
+    const startTime = parseToBrisbane(appointment.startTime);
+    const endTime = parseToBrisbane(appointment.endTime);
+
+    if (!startTime || !endTime || !startTime.isValid() || !endTime.isValid()) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
     }
+
+    // Debug logs — verify correct moments
+    console.log('Parsed startTime (ISO):', startTime.toISOString());
+    console.log('Parsed startTime (Brisbane formatted):', startTime.format('YYYY-MM-DD HH:mm:ss'));
+    console.log('Parsed endTime (ISO):', endTime.toISOString());
+    console.log('Parsed endTime (Brisbane formatted):', endTime.format('YYYY-MM-DD HH:mm:ss'));
 
     let contact;
     try {
@@ -902,7 +944,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
           (c.email ? c.email.toLowerCase().trim() : '') === contactEmail ||
           (c.name ? c.name.toLowerCase().trim() : '') === contactName
       );
-
       if (matchingCompany) {
         companyUuid = matchingCompany.uuid;
         console.log(`Found existing ServiceM8 company: ${companyUuid}`);
@@ -913,7 +954,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         });
         companyUuid = newCompanyResponse.headers['x-record-uuid'];
         console.log(`Created new ServiceM8 company: ${companyUuid}`);
-
         const companyContactData = {
           company_uuid: companyUuid,
           first: firstName,
@@ -940,6 +980,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       job_address: appointment.location || contact.address1 || 'No address provided',
       job_description: `${appointment.title || 'GHL Appointment'}\nIssue: ${appointment.issue || 'Not specified'}`,
     };
+
     let jobUuid;
     try {
       const jobResponse = await serviceM8Api.post('/job.json', jobData);
@@ -980,13 +1021,13 @@ app.post('/ghl-appointment-sync', async (req, res) => {
         const filter = `$filter=staff_uuid eq '${staffUuid}'`;
         const activitiesResponse = await serviceM8Api.get(`/jobactivity.json?${filter}`);
         const activities = activitiesResponse.data;
-
         console.log(`Fetched ${activities.length} activities for staff ${staffUuid}`);
-
         const appointmentDate = startTime.clone().startOf('day');
         for (const activity of activities) {
+          // Parse activity times and convert to Brisbane to compare apples-to-apples
           const activityStart = moment(activity.start_date).tz('Australia/Brisbane');
           const activityEnd = moment(activity.end_date).tz('Australia/Brisbane');
+
           if (activityStart.isSame(appointmentDate, 'day')) {
             if (
               startTime.isBetween(activityStart, activityEnd, undefined, '[)') ||
@@ -1018,7 +1059,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       return res.status(200).json({ message: 'No available slot in ServiceM8' });
     }
 
-    // Create job activity with selected staff
+    // Create job activity with selected staff (use Brisbane-formatted local times)
     const activityData = {
       job_uuid: jobUuid,
       staff_uuid: selectedStaffUuid,
@@ -1037,10 +1078,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       const activityUuid = response.headers['x-record-uuid'];
       console.log(`Created ServiceM8 job activity: ${activityUuid} for appointment ${appointmentId}, staff: ${selectedStaffUuid}`);
       console.log(`Activity details: start_date=${activityData.start_date}, end_date=${activityData.end_date}, job_uuid=${jobUuid}, scheduled=${activityData.activity_was_scheduled}, active=${activityData.active}`);
-
       processedAppointments.add(appointmentId);
       saveProcessedAppointments(processedAppointments);
-
       res.status(200).json({ message: 'Appointment synced', jobUuid, activityUuid });
     } catch (error) {
       console.error('Error creating ServiceM8 job activity:', error.response?.data || error.message);
@@ -1051,7 +1090,6 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     return res.status(500).json({ error: 'Failed to process webhook' });
   }
 });
-
 // Temporary endpoints for testing
 app.get('/test-payment-check', async (req, res) => {
   console.log('Triggering test payment check...');
