@@ -23,7 +23,8 @@ const CLIENT_ID = process.env.GHL_CLIENT_ID;
 const CLIENT_SECRET = process.env.GHL_CLIENT_SECRET;
 const REDIRECT_URI = process.env.GHL_REDIRECT_URI || `http://localhost:${PORT}/callback`;
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
-const APP_NAME = 'assurefixinteg-8a33dda2d6df';
+const APP_NAME = 'assurefixinteg';
+const GHL_API_KEY = process.env.GHL_API_KEY;
 
 // ServiceM8 credentials
 const SERVICE_M8_API_KEY = process.env.SERVICE_M8_API_KEY;
