@@ -1263,21 +1263,6 @@ cron.schedule('0 0,12 * * *', async () => {
   timezone: 'Australia/Brisbane'
 });
 
-// 2) Proactive scheduling based on current token expiry
-// On startup, load existing tokens and schedule next refresh accordingly
-(function initProactiveScheduling() {
-  try {
-    const tokens = loadTokens();
-    if (tokens) {
-      scheduleNextRefresh(tokens);
-      console.log('Proactive refresh scheduled on startup based on token expiry.');
-    } else {
-      console.log('No tokens available at startup for proactive scheduling.');
-    }
-  } catch (e) {
-    console.error('Error initializing proactive scheduling:', e.message || e);
-  }
-})();
 
 // 3) Also run a startup refresh attempt (non-blocking) to ensure tokens are fresh
 (async () => {
