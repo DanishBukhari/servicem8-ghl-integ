@@ -1251,28 +1251,7 @@ cron.schedule('0 0 * * *', () => {
 
 // Schedule proactive token refresh every 12 hours
 cron.schedule('0 */12 * * *', getAccessToken());
-// 1) Cron: run at 00:00 and 12:00 Brisbane time (every 12 hours in Brisbane)
-cron.schedule('0 0,12 * * *', async () => {
-  try {
-    console.log(`[cron] Triggered refresh at ${moment().format()}`);
-    await refreshTokens();
-  } catch (e) {
-    console.error('[cron] Error refreshing tokens:', e.response?.data || e.message || e);
-  }
-}, {
-  timezone: 'Australia/Brisbane'
-});
 
-
-// 3) Also run a startup refresh attempt (non-blocking) to ensure tokens are fresh
-(async () => {
-  try {
-    console.log("Startup: attempting a non-blocking token refresh (if tokens exist)...");
-    await refreshTokens();
-  } catch (e) {
-    // already logged inside refreshTokens
-  }
-})();
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
