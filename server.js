@@ -1241,7 +1241,10 @@ app.get('/me', async (req, res) => {
   try {
     const accessToken = await getAccessToken();
     const response = await axios.get('https://services.leadconnectorhq.com/users/me', {
-      headers: { Authorization: `Bearer ${accessToken}` },
+      headers: { Authorization: `Bearer ${accessToken}`,
+        Version: '2021-04-15'
+                
+     },
     });
     res.json(response.data);
   } catch (err) {
