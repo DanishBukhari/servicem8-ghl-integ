@@ -538,7 +538,7 @@ function assignPhoneFields(data, phoneNumber) {
 app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
   try {
     console.log('Starting job creation from GHL...');
-    const { firstName, lastName, email, phone, address, jobDescription, ghlContactId, source, urgency } = req.body;
+    const { firstName, lastName, email, phone, address, jobDescription, ghlContactId } = req.body;
     if (!firstName || !lastName || !email || !ghlContactId) {
       console.log('Missing required fields:', { firstName, lastName, email, ghlContactId });
       return res.status(400).json({ error: 'Missing required fields' });
@@ -632,8 +632,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.error('Failed to fetch contact message from GHL:', error.response?.data || error.message);
     }
     const jobDescriptionWithMessage = message
-     ?
-      `Enquiry details: ${message}\nUrgency: ${urgency}\nSoruce: ${source}\nGHL Contact ID: ${ghlContactId} || ''}`
+      ? `Enquiry details: ${message}\nGHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`
       : `GHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`;
     const jobData = {
       company_uuid: companyUuid,
@@ -980,7 +979,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 // Temporary endpoints for testing
 app.get('/test-payment-check', async (req, res) => {
   console.log('Triggering test payment check...');
-  await checkCompletedJobs();
+  await checkPaymentStatus();
   res.send('Payment check triggered');
 });
 app.get('/test-contact-check', async (req, res) => {
@@ -1005,7 +1004,7 @@ cron.schedule('*/2880 * * * *', () => {
 });
 cron.schedule('*/2880 * * * *', () => {
   console.log('Scheduled polling for payment status...');
-  checkCompletedJobs();
+  checkPaymentStatus();
 });
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
