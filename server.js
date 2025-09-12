@@ -29,6 +29,10 @@ const GHL_API_KEY = process.env.GHL_API_KEY;
 const SERVICE_M8_API_KEY = process.env.SERVICE_M8_API_KEY;
 const GHL_WEBHOOK_URL = process.env.GHL_WEBHOOK_URL;
 
+// Heroku details
+const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
+const APP_NAME = 'assurefixinteg-8a33dda2d6df';
+
 // Ensure uploads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'Uploads');
 fsPromises.mkdir(UPLOADS_DIR, { recursive: true }).catch((error) => {
@@ -38,8 +42,8 @@ fsPromises.mkdir(UPLOADS_DIR, { recursive: true }).catch((error) => {
 // File-based token storage
 const TOKEN_FILE = './tokens.json';
 
-// Utility: Save tokens to file
-function saveTokens(tokens) {
+// Utility: Save tokens to file and update Heroku config vars
+async function saveTokens(tokens) {
   try {
     fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
     console.log('Tokens saved to tokens.json:', {
@@ -49,10 +53,30 @@ function saveTokens(tokens) {
       expires_in: tokens.expires_in,
       scope: tokens.scope,
     });
-    console.log('To persist tokens on Heroku, run:');
-    console.log(`heroku config:set GHL_ACCESS_TOKEN=${tokens.access_token} GHL_REFRESH_TOKEN=${tokens.refresh_token} GHL_TOKEN_CREATED_AT=${tokens.created_at} GHL_TOKEN_EXPIRES_IN=${tokens.expires_in} --app assurefixinteg-8a33dda2d6df`);
+    await updateHerokuConfig(tokens);
   } catch (error) {
     console.error('Error saving tokens to file:', error.message);
+  }
+}
+
+// Utility: Update Heroku config vars with new tokens
+async function updateHerokuConfig(tokens) {
+  try {
+    await axios.patch(`https://api.heroku.com/apps/${APP_NAME}/config-vars`, {
+      GHL_ACCESS_TOKEN: tokens.access_token,
+      GHL_REFRESH_TOKEN: tokens.refresh_token,
+      GHL_TOKEN_CREATED_AT: tokens.created_at.toString(),
+      GHL_TOKEN_EXPIRES_IN: tokens.expires_in.toString(),
+    }, {
+      headers: {
+        Authorization: `Bearer ${HEROKU_API_KEY}`,
+        Accept: 'application/vnd.heroku+json; version=3',
+        'Content-Type': 'application/json',
+      },
+    });
+    console.log('Updated Heroku config vars with new tokens');
+  } catch (err) {
+    console.error('Error updating Heroku config vars:', err.response?.data || err.message);
   }
 }
 
@@ -111,9 +135,9 @@ app.get('/callback', async (req, res) => {
       created_at: Math.floor(Date.now() / 1000),
     };
 
-    saveTokens(tokens);
+    await saveTokens(tokens);
 
-    res.send('✅ Tokens saved! Copy the tokens from logs and set as Heroku config vars using: heroku config:set GHL_ACCESS_TOKEN=... GHL_REFRESH_TOKEN=... GHL_TOKEN_CREATED_AT=... GHL_TOKEN_EXPIRES_IN=... --app assurefixinteg-8a33dda2d6df');
+    res.send('✅ Tokens saved and updated on Heroku!');
   } catch (err) {
     console.error('Token exchange error:', err.response?.data || err.message);
     res.status(500).send('Failed to exchange code for tokens.');
@@ -155,10 +179,49 @@ async function getAccessToken() {
       created_at: Math.floor(Date.now() / 1000),
     };
 
-    saveTokens(tokens);
+    await saveTokens(tokens);
   }
 
   return tokens.access_token;
+}
+
+// Function to proactively refresh tokens
+async function refreshTokens() {
+  console.log('Proactively refreshing tokens...');
+  let tokens = loadTokens();
+
+  if (!tokens) {
+    console.log('No tokens available to refresh.');
+    return;
+  }
+
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    grant_type: 'refresh_token',
+    refresh_token: tokens.refresh_token,
+  });
+
+  try {
+    const response = await axios.post(
+      'https://services.leadconnectorhq.com/oauth/token',
+      params,
+      {
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      }
+    );
+
+    tokens = {
+      ...response.data,
+      refresh_token: tokens.refresh_token,
+      created_at: Math.floor(Date.now() / 1000),
+    };
+
+    await saveTokens(tokens);
+    console.log('Tokens refreshed successfully.');
+  } catch (err) {
+    console.error('Refresh error:', err.response?.data || err.message);
+  }
 }
 
 // Axios instance for ServiceM8
@@ -356,51 +419,33 @@ const checkNewContacts = async () => {
   }
 };
 
-// Check payment status and trigger GHL webhook
-const checkPaymentStatus = async () => {
+// Check job completions and trigger GHL webhook for review requests
+const checkJobCompletions = async () => {
   try {
-    console.log('Starting payment status check...');
+    console.log('Starting job completion check...');
     const currentTimestamp = Date.now();
 
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
-    const twentyMinutesAgo = now.clone().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
+    const twentyFourHoursAgo = now.clone().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
     const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
-    console.log(`Checking payments edited after ${twentyMinutesAgo} for jobs completed on or after ${targetDate}`);
+    console.log(`Checking jobs edited after ${twentyFourHoursAgo} and completed on or after ${targetDate}`);
 
-    const paymentFilter = `$filter=edit_date gt '${twentyMinutesAgo}'`;
-    const paymentsResponse = await serviceM8Api.get(`/jobpayment.json?${paymentFilter}`);
-    const payments = paymentsResponse.data;
-    console.log(`Fetched ${payments.length} payments edited in the last 20 minutes`);
+    const jobFilter = `$filter=edit_date gt '${twentyFourHoursAgo}' and status eq 'Completed'`;
+    const jobsResponse = await serviceM8Api.get(`/job.json?${jobFilter}`);
+    const jobs = jobsResponse.data;
+    console.log(`Fetched ${jobs.length} completed jobs edited in the last 24 hours`);
 
-    for (const payment of payments) {
-      const paymentUuid = payment.uuid;
-      const jobUuid = payment.job_uuid;
-      console.log(`Processing payment ${paymentUuid} for job ${jobUuid}`);
+    for (const job of jobs) {
+      const jobUuid = job.uuid;
+      console.log(`Processing job ${jobUuid}`);
 
-      if (processedJobs.has(paymentUuid)) {
-        console.log(`Payment ${paymentUuid} already processed, skipping.`);
+      if (processedJobs.has(jobUuid)) {
+        console.log(`Job ${jobUuid} already processed, skipping.`);
         continue;
       }
 
-      let job;
-      try {
-        const jobResponse = await serviceM8Api.get(`/job.json?$filter=uuid eq '${jobUuid}'`);
-        job = jobResponse.data[0];
-        console.log(`Fetched job ${jobUuid}: status=${job?.status}, company_uuid=${job?.company_uuid}, edit_date=${job?.edit_date}`);
-      } catch (error) {
-        console.error(`Error fetching job ${jobUuid}:`, error.response ? error.response.data : error.message);
-        continue;
-      }
-      if (!job) {
-        console.log(`No job found for job_uuid ${jobUuid}, skipping payment ${paymentUuid}`);
-        continue;
-      }
-
-      if (job.status.toLowerCase() !== 'completed') {
-        console.log(`Job ${jobUuid} is not completed (status: ${job.status}), skipping payment ${paymentUuid}`);
-        continue;
-      }
+      console.log(`Fetched job ${jobUuid}: status=${job?.status}, company_uuid=${job?.company_uuid}, edit_date=${job?.edit_date}`);
 
       let completionDate = null;
       try {
@@ -430,13 +475,13 @@ const checkPaymentStatus = async () => {
       }
 
       if (!completionDate) {
-        console.log(`No completion date available for job ${jobUuid}, skipping payment ${paymentUuid}`);
+        console.log(`No completion date available for job ${jobUuid}, skipping.`);
         continue;
       }
       const targetMoment = moment(targetDate).tz(accountTimezone);
       console.log(`Job ${jobUuid} completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}, target: ${targetMoment.format('YYYY-MM-DD HH:mm:ss')}`);
       if (!completionDate.isSameOrAfter(targetMoment)) {
-        console.log(`Payment ${paymentUuid} belongs to job ${jobUuid} not completed on or after May 24, 2025, skipping.`);
+        console.log(`Job ${jobUuid} not completed on or after May 24, 2025, skipping.`);
         continue;
       }
 
@@ -454,9 +499,9 @@ const checkPaymentStatus = async () => {
         }
       }
 
-      if (categoryName === 'real estate agents' && categoryName === 'property manager') {
-        console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents or property manaager`);
-        processedJobs.add(paymentUuid);
+      if (categoryName === 'real estate agents' || categoryName === 'property managers') {
+        console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents or Property Managers`);
+        processedJobs.add(jobUuid);
         continue;
       }
 
@@ -468,7 +513,7 @@ const checkPaymentStatus = async () => {
       }
       const companyUuid = job.company_uuid;
       if (!companyUuid) {
-        console.log(`No company_uuid for job ${jobUuid}, skipping payment ${paymentUuid}`);
+        console.log(`No company_uuid for job ${jobUuid}, skipping.`);
         continue;
       }
 
@@ -487,22 +532,19 @@ const checkPaymentStatus = async () => {
 
       const contactKey = ghlContactId || clientEmail;
       if (contactKey && processedContacts.has(contactKey)) {
-        console.log(`Contact ${contactKey} already triggered, skipping payment ${paymentUuid}`);
+        console.log(`Contact ${contactKey} already triggered, skipping job ${jobUuid}`);
         continue;
       }
 
       if (
-        payment.active === 1 &&
-        payment.amount > 0 &&
-        moment(payment.edit_date).tz(accountTimezone).isAfter(twentyMinutesAgo)
+        completionDate.isAfter(moment(twentyFourHoursAgo).tz(accountTimezone))
       ) {
-        console.log(`Recent paid payment found: UUID ${paymentUuid}, Amount ${payment.amount}, Job UUID ${jobUuid}, Edit Date ${payment.edit_date}`);
+        console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         const webhookPayload = {
-          paymentUuid: paymentUuid,
           jobUuid: jobUuid,
           clientEmail: clientEmail || '',
           ghlContactId: ghlContactId,
-          status: 'Invoice Paid',
+          status: 'Job Completed',
         };
         try {
           const webhookResponse = await axios.post(GHL_WEBHOOK_URL, webhookPayload, {
@@ -512,29 +554,27 @@ const checkPaymentStatus = async () => {
             },
           });
           console.log(
-            `GHL webhook triggered for payment ${paymentUuid}: status=${webhookResponse.status}, response=${JSON.stringify(webhookResponse.data)}`
+            `GHL webhook triggered for job ${jobUuid}: status=${webhookResponse.status}, response=${JSON.stringify(webhookResponse.data)}`
           );
-          processedJobs.add(paymentUuid);
+          processedJobs.add(jobUuid);
           if (contactKey) processedContacts.add(contactKey);
         } catch (webhookError) {
           console.error(
-            `Failed to trigger GHL webhook for payment ${paymentUuid}:`,
+            `Failed to trigger GHL webhook for job ${jobUuid}:`,
             webhookError.response ? webhookError.response.data : webhookError.message
           );
         }
       } else {
-        console.log(`Payment ${paymentUuid} is not paid or not recent, skipping. Details:`, {
-          active: payment.active,
-          amount: payment.amount,
-          edit_date: payment.edit_date,
+        console.log(`Job ${jobUuid} is not recently completed, skipping. Details:`, {
+          completionDate: completionDate.format('YYYY-MM-DD HH:mm:ss'),
         });
       }
     }
 
     await saveState(currentTimestamp);
-    console.log('Payment status check completed.');
+    console.log('Job completion check completed.');
   } catch (error) {
-    console.error('Error checking payment status:', error.response ? error.response.data : error.message);
+    console.error('Error checking job completions:', error.response ? error.response.data : error.message);
   }
 };
 
@@ -564,7 +604,7 @@ function assignPhoneFields(data, phoneNumber) {
 app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
   try {
     console.log('Starting job creation from GHL...');
-    const { firstName, lastName, email, phone, address, jobDescription, ghlContactId, source, urgency } = req.body;
+    const { firstName, lastName, email, phone, address, jobDescription, ghlContactId } = req.body;
 
     if (!firstName || !lastName || !email || !ghlContactId) {
       console.log('Missing required fields:', { firstName, lastName, email, ghlContactId });
@@ -637,6 +677,8 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     }
 
     let message = '';
+    let urgency = '';
+    let source = '';
     try {
       const contactResponse = await ghlApi.get(`/contacts/${ghlContactId}`, {
         params: { include: 'customFields' },
@@ -662,6 +704,22 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
         } else {
           console.log(`No Message field found in customFields for contact ${ghlContactId}:`, customFields);
         }
+
+        const urgencyField = customFields.find(field => field.id === 'wqA4BoeymIy9Vhi6E5t3');
+        if (urgencyField && (urgencyField.value || urgencyField.values)) {
+          urgency = urgencyField.value || (urgencyField.values && urgencyField.values.join(', ')) || '';
+          console.log(`Urgency retrieved for contact ${ghlContactId}: ${urgency}`);
+        } else {
+          console.log(`No Urgency field found in customFields for contact ${ghlContactId}`);
+        }
+
+        const sourceField = customFields.find(field => field.id === '1EkwGnC9UtMNrTCwGnBk');
+        if (sourceField && (sourceField.value || sourceField.values)) {
+          source = sourceField.value || (sourceField.values && sourceField.values.join(', ')) || '';
+          console.log(`Source retrieved for contact ${ghlContactId}: ${source}`);
+        } else {
+          console.log(`No Source field found in customFields for contact ${ghlContactId}`);
+        }
       } else {
         console.log(`No customFields available or accessible for contact ${ghlContactId}`);
       }
@@ -669,9 +727,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.error('Failed to fetch contact message from GHL:', error.response?.data || error.message);
     }
 
-    const jobDescriptionWithMessage = message
-      ? `Enquiry details: ${message}\nUrgency: ${urgency}\nSource: ${source}GHL Contact ID: ${ghlContactId} || ''}`
-      : `GHL Contact ID: ${ghlContactId}\n${jobDescription || ''}`;
+    const jobDescriptionWithMessage = `Enquiry details: ${message}\nUrgency: ${urgency}\nSource: ${source}\nGHL Contact ID: ${ghlContactId}${jobDescription ? '\n' + jobDescription : ''}`;
     const jobData = {
       company_uuid: companyUuid,
       status: 'Quote',
@@ -855,6 +911,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
 
 // Endpoint to handle GHL webhook for new appointments
 app.post('/ghl-appointment-sync', async (req, res) => {
+  console.log('Received GHL webhook payload:', JSON.stringify(req.body, null, 2));
   const processedAppointments = loadProcessedAppointments();
   const appointment = req.body;
 
@@ -870,8 +927,12 @@ app.post('/ghl-appointment-sync', async (req, res) => {
   }
 
   try {
+    console.log('Appointment startTime string from GHL:', appointment.startTime);
+    console.log('Appointment endTime string from GHL:', appointment.endTime);
     const startTime = moment(appointment.startTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
     const endTime = moment(appointment.endTime, 'dddd, MMMM D, YYYY h:mm A').tz('Australia/Brisbane');
+    console.log('Parsed startTime:', startTime.toISOString(), 'in Brisbane:', startTime.format('YYYY-MM-DD HH:mm:ss'));
+    console.log('Parsed endTime:', endTime.toISOString(), 'in Brisbane:', endTime.format('YYYY-MM-DD HH:mm:ss'));
     if (!startTime.isValid() || !endTime.isValid()) {
       console.error('Invalid date format for startTime or endTime:', appointment.startTime, appointment.endTime);
       return res.status(400).json({ error: 'Invalid date format' });
@@ -1032,11 +1093,18 @@ app.post('/ghl-appointment-sync', async (req, res) => {
       active: 1,
     };
 
+    console.log('Sending to ServiceM8: start_date=', activityData.start_date, 'end_date=', activityData.end_date);
+
     try {
       const response = await serviceM8Api.post('/jobactivity.json', activityData);
       const activityUuid = response.headers['x-record-uuid'];
       console.log(`Created ServiceM8 job activity: ${activityUuid} for appointment ${appointmentId}, staff: ${selectedStaffUuid}`);
       console.log(`Activity details: start_date=${activityData.start_date}, end_date=${activityData.end_date}, job_uuid=${jobUuid}, scheduled=${activityData.activity_was_scheduled}, active=${activityData.active}`);
+
+      // Fetch the created activity to check stored dates
+      const fetchedActivityResponse = await serviceM8Api.get(`/jobactivity/${activityUuid}.json`);
+      const fetchedActivity = fetchedActivityResponse.data;
+      console.log('Stored in ServiceM8: start_date=', fetchedActivity.start_date, 'end_date=', fetchedActivity.end_date);
 
       processedAppointments.add(appointmentId);
       saveProcessedAppointments(processedAppointments);
@@ -1053,16 +1121,22 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 });
 
 // Temporary endpoints for testing
-app.get('/test-payment-check', async (req, res) => {
-  console.log('Triggering test payment check...');
-  await checkPaymentStatus();
-  res.send('Payment check triggered');
+app.get('/test-job-completion-check', async (req, res) => {
+  console.log('Triggering test job completion check...');
+  await checkJobCompletions();
+  res.send('Job completion check triggered');
 });
 
 app.get('/test-contact-check', async (req, res) => {
   console.log('Triggering test contact check...');
   await checkNewContacts();
   res.send('Contact check triggered');
+});
+
+app.get('/test-refresh-tokens', async (req, res) => {
+  console.log('Triggering test token refresh...');
+  await refreshTokens();
+  res.send('Tokens refreshed');
 });
 
 app.get('/test-contact/:id', async (req, res) => {
@@ -1077,15 +1151,18 @@ app.get('/test-contact/:id', async (req, res) => {
 });
 
 // Schedule polling
-cron.schedule('*/1440 * * * *', () => {
+cron.schedule('*/20 * * * *', () => {
   console.log('Scheduled polling for new contacts...');
   checkNewContacts();
 });
 
-cron.schedule('*/1440 * * * *', () => {
-  console.log('Scheduled polling for payment status...');
-  checkPaymentStatus();
+cron.schedule('0 0 * * *', () => {
+  console.log('Scheduled polling for job completions...');
+  checkJobCompletions();
 });
+
+// Schedule proactive token refresh every 12 hours
+cron.schedule('0 */12 * * *', refreshTokens);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
