@@ -61,41 +61,84 @@ async function saveTokens(tokens) {
 
 // Utility: Update Heroku config vars with new tokens
 async function updateHerokuConfig(tokens) {
+  if (!APP_NAME || !HEROKU_API_KEY) {
+    console.log("Heroku APP_NAME or HEROKU_API_KEY not set; skipping Heroku config update.");
+    return;
+  }
+
   try {
-    await axios.patch(`https://api.heroku.com/apps/${APP_NAME}/config-vars`, {
-      GHL_ACCESS_TOKEN: tokens.access_token,
-      GHL_REFRESH_TOKEN: tokens.refresh_token,
-      GHL_TOKEN_CREATED_AT: tokens.created_at.toString(),
-      GHL_TOKEN_EXPIRES_IN: tokens.expires_in.toString(),
-    }, {
-      headers: {
-        Authorization: `Bearer ${HEROKU_API_KEY}`,
-        Accept: 'application/vnd.heroku+json; version=3',
-        'Content-Type': 'application/json',
-      },
-    });
-    console.log('Updated Heroku config vars with new tokens');
+    // Prepare payload (must be a JSON object mapping env var names -> values)
+    const payload = {
+      GHL_ACCESS_TOKEN: tokens.access_token || "",
+      GHL_REFRESH_TOKEN: tokens.refresh_token || "",
+      GHL_TOKEN_CREATED_AT: (tokens.created_at ? tokens.created_at.toString() : `${Math.floor(Date.now() / 1000)}`),
+      GHL_TOKEN_EXPIRES_IN: (tokens.expires_in ? tokens.expires_in.toString() : "3600"),
+    };
+
+    await axios.patch(
+      `https://api.heroku.com/apps/${APP_NAME}/config-vars`,
+      payload,
+      {
+        headers: {
+          Authorization: `Bearer ${HEROKU_API_KEY}`,
+          Accept: "application/vnd.heroku+json; version=3",
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    console.log("Updated Heroku config vars with new tokens");
   } catch (err) {
-    console.error('Error updating Heroku config vars:', err.response?.data || err.message);
+    console.error("Error updating Heroku config vars:", err.response?.data || err.message);
   }
 }
 
-// Utility: Load tokens from file or config vars
+/**
+ * Save tokens to disk and (if configured) to Heroku config vars.
+ */
+async function saveTokens(tokens) {
+  try {
+    // Ensure created_at exists
+    if (!tokens.created_at) tokens.created_at = Math.floor(Date.now() / 1000);
+
+    fs.writeFileSync(TOKEN_FILE, JSON.stringify(tokens, null, 2));
+    console.log(`Saved tokens to ${TOKEN_FILE}`);
+
+    // Try updating Heroku config if keys present
+    await updateHerokuConfig(tokens);
+  } catch (err) {
+    console.error("Error saving tokens:", err.response?.data || err.message || err);
+  }
+}
+
+/**
+ * Load tokens: prefer Heroku config vars when available, fallback to tokens.json
+ */
 function loadTokens() {
+  // If Heroku config vars present, load from them
   if (process.env.GHL_ACCESS_TOKEN && process.env.GHL_REFRESH_TOKEN) {
-    console.log('Loading tokens from Heroku config vars');
+    console.log("Loading tokens from Heroku config vars");
     return {
       access_token: process.env.GHL_ACCESS_TOKEN,
       refresh_token: process.env.GHL_REFRESH_TOKEN,
-      created_at: parseInt(process.env.GHL_TOKEN_CREATED_AT) || Math.floor(Date.now() / 1000),
-      expires_in: parseInt(process.env.GHL_TOKEN_EXPIRES_IN) || 3600,
+      created_at: parseInt(process.env.GHL_TOKEN_CREATED_AT, 10) || Math.floor(Date.now() / 1000),
+      expires_in: parseInt(process.env.GHL_TOKEN_EXPIRES_IN, 10) || 3600,
     };
   }
+
+  // Otherwise try tokens.json
   if (fs.existsSync(TOKEN_FILE)) {
-    console.log('Loading tokens from tokens.json');
-    return JSON.parse(fs.readFileSync(TOKEN_FILE));
+    try {
+      console.log("Loading tokens from tokens.json");
+      const raw = fs.readFileSync(TOKEN_FILE, "utf8");
+      const parsed = JSON.parse(raw);
+      return parsed;
+    } catch (err) {
+      console.error("Error reading tokens.json:", err.message);
+      return null;
+    }
   }
-  console.log('No tokens found');
+
+  console.log("No tokens found");
   return null;
 }
 
@@ -165,23 +208,48 @@ async function getAccessToken() {
       refresh_token: tokens.refresh_token,
     });
 
-    const response = await axios.post(
-      'https://services.leadconnectorhq.com/oauth/token',
-      params,
-      {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    try {
+      const response = await axios.post(
+        'https://services.leadconnectorhq.com/oauth/token',
+        params,
+        {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        }
+      );
+
+      tokens = {
+        ...response.data,
+        // keep previous refresh_token if provider didn't return a new one
+        refresh_token: response.data.refresh_token || tokens.refresh_token,
+        created_at: Math.floor(Date.now() / 1000),
+      };
+
+      // Persist updated tokens
+      await saveTokens(tokens);
+    } catch (err) {
+      // Handle invalid_grant specifically (invalid/expired refresh token)
+      const errData = err.response?.data;
+      console.error('Refresh error:', errData || err.message);
+
+      if (errData && errData.error === 'invalid_grant') {
+        console.error('Refresh token invalid. You must re-authorize via /auth to get new tokens.');
+        // Optional cleanup: remove local token file so next run knows to re-auth
+        try {
+          if (fs.existsSync(TOKEN_FILE)) {
+            fs.unlinkSync(TOKEN_FILE);
+            console.log('Removed local tokens.json due to invalid refresh token.');
+          }
+        } catch (unlinkErr) {
+          console.error('Error removing tokens.json:', unlinkErr.message);
+        }
       }
-    );
 
-    tokens = {
-      ...response.data,
-      refresh_token: response.data.refresh_token || tokens.refresh_token,
-      created_at: Math.floor(Date.now() / 1000),
-    };
-
-    await saveTokens(tokens);
+      throw err; // rethrow for caller to handle
+    }
   }
 
+  // reload tokens after potential refresh
+  tokens = loadTokens();
   return tokens.access_token;
 }
 
@@ -220,7 +288,21 @@ async function refreshTokens() {
     await saveTokens(tokens);
     console.log('Tokens refreshed successfully.');
   } catch (err) {
-    console.error('Refresh error:', err.response?.data || err.message);
+    const errData = err.response?.data;
+    console.error('Refresh error:', errData || err.message);
+
+    if (errData && errData.error === 'invalid_grant') {
+      console.error('Refresh token invalid. Re-authorize via /auth.');
+      // Remove local tokens.json so you can re-auth
+      try {
+        if (fs.existsSync(TOKEN_FILE)) {
+          fs.unlinkSync(TOKEN_FILE);
+          console.log('Removed local tokens.json due to invalid refresh token.');
+        }
+      } catch (unlinkErr) {
+        console.error('Error removing tokens.json:', unlinkErr.message);
+      }
+    }
   }
 }
 // Axios instance for ServiceM8
@@ -1146,6 +1228,19 @@ app.get('/test-contact/:id', async (req, res) => {
   } catch (error) {
     console.error('Test contact fetch error:', error.response?.data || error.message);
     res.status(500).json({ error: error.response?.data || error.message });
+  }
+});
+
+app.get('/me', async (req, res) => {
+  try {
+    const accessToken = await getAccessToken();
+    const response = await axios.get('https://services.leadconnectorhq.com/users/me', {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    res.json(response.data);
+  } catch (err) {
+    console.error('API call error:', err.response?.data || err.message);
+    res.status(500).send('Failed to fetch data from GHL.');
   }
 });
 
