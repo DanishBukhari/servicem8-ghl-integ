@@ -31,7 +31,7 @@ const GHL_WEBHOOK_URL = process.env.GHL_WEBHOOK_URL;
 
 // Heroku details
 const HEROKU_API_KEY = process.env.HEROKU_API_KEY;
-const APP_NAME = 'assurefixinteg-8a33dda2d6df';
+const APP_NAME = 'assurefixinteg';
 
 // Ensure uploads directory exists
 const UPLOADS_DIR = path.join(__dirname, 'Uploads');
@@ -727,7 +727,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.error('Failed to fetch contact message from GHL:', error.response?.data || error.message);
     }
 
-    const jobDescriptionWithMessage = `Enquiry details: ${message}\nUrgency: ${urgency}\nSource: ${source}\nGHL Contact ID: ${ghlContactId}${jobDescription ? '\n' + jobDescription : ''}`;
+    const jobDescriptionWithMessage = `Enquiry details: ${message}\nUrgency: ${urgency}\nSource: ${source}\nGHL Contact ID: ${ghlContactId}`;
     const jobData = {
       company_uuid: companyUuid,
       status: 'Quote',
