@@ -175,7 +175,7 @@ async function getAccessToken() {
 
     tokens = {
       ...response.data,
-      refresh_token: tokens.refresh_token,
+      refresh_token: response.data.refresh_token || tokens.refresh_token,
       created_at: Math.floor(Date.now() / 1000),
     };
 
@@ -213,7 +213,7 @@ async function refreshTokens() {
 
     tokens = {
       ...response.data,
-      refresh_token: tokens.refresh_token,
+      refresh_token: response.data.refresh_token || tokens.refresh_token,
       created_at: Math.floor(Date.now() / 1000),
     };
 
@@ -223,7 +223,6 @@ async function refreshTokens() {
     console.error('Refresh error:', err.response?.data || err.message);
   }
 }
-
 // Axios instance for ServiceM8
 const serviceM8Api = axios.create({
   baseURL: 'https://api.servicem8.com/api_1.0',
@@ -499,7 +498,7 @@ const checkJobCompletions = async () => {
         }
       }
 
-      if (categoryName === 'real estate agents' || categoryName === 'property managers') {
+      if (categoryName === 'real estate agents' || categoryName === 'property manager') {
         console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents or Property Managers`);
         processedJobs.add(jobUuid);
         continue;
