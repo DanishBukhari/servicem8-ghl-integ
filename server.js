@@ -1238,6 +1238,7 @@ app.get('/test-contact/:id', async (req, res) => {
 });
 
 
+
 // Schedule polling
 cron.schedule('*/20 * * * *', () => {
   console.log('Scheduled polling for new contacts...');
@@ -1250,8 +1251,7 @@ cron.schedule('0 0 * * *', () => {
 });
 
 // Schedule proactive token refresh every 12 hours
-cron.schedule('0 */12 * * *', getAccessToken());
-
+cron.schedule('0 */12 * * *', refreshTokens);
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
