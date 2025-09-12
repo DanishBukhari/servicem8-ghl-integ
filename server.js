@@ -169,7 +169,9 @@ app.get('/callback', async (req, res) => {
       'https://services.leadconnectorhq.com/oauth/token',
       params,
       {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded',
+          Version: '2021-04-15'
+         },
       }
     );
 
@@ -213,7 +215,9 @@ async function getAccessToken() {
         'https://services.leadconnectorhq.com/oauth/token',
         params,
         {
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded'
+          , Version: '2021-04-15'
+           },
         }
       );
 
@@ -275,7 +279,9 @@ async function refreshTokens() {
       'https://services.leadconnectorhq.com/oauth/token',
       params,
       {
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded'
+        , Version: '2021-04-15'
+         },
       }
     );
 
