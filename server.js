@@ -1237,21 +1237,6 @@ app.get('/test-contact/:id', async (req, res) => {
   }
 });
 
-app.get('/me', async (req, res) => {
-  try {
-    const accessToken = await getAccessToken();
-    const response = await axios.get('https://services.leadconnectorhq.com/users/3bd03dmtTjxQf1NTbHxD', {
-      headers: { Authorization: `Bearer ${accessToken}`,
-        Version: '2021-04-15'
-                
-     },
-    });
-    res.json(response.data);
-  } catch (err) {
-    console.error('API call error:', err.response?.data || err.message);
-    res.status(500).send('Failed to fetch data from GHL.');
-  }
-});
 
 // Schedule polling
 cron.schedule('*/20 * * * *', () => {
@@ -1265,7 +1250,44 @@ cron.schedule('0 0 * * *', () => {
 });
 
 // Schedule proactive token refresh every 12 hours
-cron.schedule('0 */12 * * *', refreshTokens);
+cron.schedule('0 */12 * * *', getAccessToken());
+// 1) Cron: run at 00:00 and 12:00 Brisbane time (every 12 hours in Brisbane)
+cron.schedule('0 0,12 * * *', async () => {
+  try {
+    console.log(`[cron] Triggered refresh at ${moment().format()}`);
+    await refreshTokens();
+  } catch (e) {
+    console.error('[cron] Error refreshing tokens:', e.response?.data || e.message || e);
+  }
+}, {
+  timezone: 'Australia/Brisbane'
+});
+
+// 2) Proactive scheduling based on current token expiry
+// On startup, load existing tokens and schedule next refresh accordingly
+(function initProactiveScheduling() {
+  try {
+    const tokens = loadTokens();
+    if (tokens) {
+      scheduleNextRefresh(tokens);
+      console.log('Proactive refresh scheduled on startup based on token expiry.');
+    } else {
+      console.log('No tokens available at startup for proactive scheduling.');
+    }
+  } catch (e) {
+    console.error('Error initializing proactive scheduling:', e.message || e);
+  }
+})();
+
+// 3) Also run a startup refresh attempt (non-blocking) to ensure tokens are fresh
+(async () => {
+  try {
+    console.log("Startup: attempting a non-blocking token refresh (if tokens exist)...");
+    await refreshTokens();
+  } catch (e) {
+    // already logged inside refreshTokens
+  }
+})();
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}`);
