@@ -1240,7 +1240,7 @@ app.get('/test-contact/:id', async (req, res) => {
 app.get('/me', async (req, res) => {
   try {
     const accessToken = await getAccessToken();
-    const response = await axios.get('https://services.leadconnectorhq.com/users/z9SZHlJOoJTr82098cK8', {
+    const response = await axios.get('https://services.leadconnectorhq.com/users/3bd03dmtTjxQf1NTbHxD', {
       headers: { Authorization: `Bearer ${accessToken}`,
         Version: '2021-04-15'
                 
