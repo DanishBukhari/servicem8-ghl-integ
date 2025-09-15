@@ -706,8 +706,8 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     }
     processedGhlContactIds.set(ghlContactId, now);
     console.log(`Processing job creation for ghlContactId ${ghlContactId}`);
-
-    const queueUuid = 'c6d397cb-a59b-42ea-ad11-233936a7ddfb';
+    // c6d397cb-a59b-42ea-ad11-233936a7ddfb for test
+    const queueUuid = '6bced9d5-c84a-4d47-84bf-22dff884744b';
     if (!queueUuid) {
       console.log('Failed to fetch "To Be Quoted (Desk Quote)" queue UUID');
       return res.status(500).json({ error: 'Failed to fetch "To Be Quoted (Desk Quote)" queue UUID' });
@@ -1084,7 +1084,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     const jobData = {
       company_uuid: companyUuid,
       status: 'Work Order',
-      queue_uuid: 'a67d1770-7a34-461a-91d9-23393bfa8d8b',
+      queue_uuid: '80e5981d-e2fb-470b-9577-23231dab715b', // a67d1770-7a34-461a-91d9-23393bfa8d8b
       job_address: appointment.location || contact.address1 || 'No address provided',
       job_description: `${appointment.title || 'GHL Appointment'}\nIssue: ${appointment.issue || 'Not specified'}`,
     };
@@ -1119,8 +1119,8 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     }
 
     // Hardcoded staff UUIDs
-    const sebastianUuid = 'bdb4d3b3-3190-41ca-9e1b-2339396aa3eb';
-    const tamsinUuid = '3899bd2d-65dc-416d-aa4d-21e1a7706aeb';
+    const sebastianUuid = '431dbebf-23ff-477a-9559-1fab55a816bb'; // bdb4d3b3-3190-41ca-9e1b-2339396aa3eb
+    const tamsinUuid = '979f57c6-cfe4-4ef5-b002-208f2994fa8b'; // 3899bd2d-65dc-416d-aa4d-21e1a7706aeb
 
     // Function to check staff availability
     const isStaffAvailable = async (staffUuid) => {
