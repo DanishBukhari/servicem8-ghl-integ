@@ -507,6 +507,7 @@ const checkNewContacts = async () => {
 };
 
 // Check job completions and trigger GHL webhook for review requests
+// Check job completions and trigger GHL webhook for review requests
 const checkJobCompletions = async () => {
   try {
     console.log('Starting job completion check...');
@@ -586,7 +587,7 @@ const checkJobCompletions = async () => {
         }
       }
 
-      if (categoryName === 'real estate agents' || categoryName === 'property manager') {
+      if (categoryName === 'real estate agents' || categoryName === 'property managers') {
         console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents or Property Managers`);
         processedJobs.add(jobUuid);
         continue;
@@ -605,16 +606,85 @@ const checkJobCompletions = async () => {
       }
 
       let clientEmail = '';
+      let primaryContact = {};
       try {
         const companyResponse = await serviceM8Api.get('/companycontact.json', {
           params: { '$filter': `company_uuid eq '${companyUuid}'` },
         });
-        const company = companyResponse.data;
-        const primaryContact = company.find(c => c.email) || {};
+        const contacts = companyResponse.data;
+        primaryContact = contacts.find(c => c.email) || contacts[0] || {};
         clientEmail = (primaryContact.email || '').trim().toLowerCase();
         console.log(`Extracted client email: ${clientEmail} for company ${companyUuid}`);
       } catch (error) {
-        console.error(`Error fetching contact for company ${companyUuid}:`, error.response ? error.response.data : error.message);
+        console.error(`Error fetching contacts for company ${companyUuid}:`, error.response ? error.response.data : error.message);
+      }
+
+      if (!ghlContactId && clientEmail) {
+        try {
+          const searchResponse = await ghlApi.get('/contacts/', {
+            params: { query: clientEmail },
+          });
+
+          const existingContact = searchResponse.data.contacts.find(
+            (c) => (c.email || '').toLowerCase().trim() === clientEmail
+          );
+          if (existingContact) {
+            ghlContactId = existingContact.id;
+            console.log(`Found existing GHL contact: ${ghlContactId} for email ${clientEmail}`);
+          } else {
+            // Fetch company details for address
+            let addressDetails = {};
+            try {
+              const companyResp = await serviceM8Api.get('/company.json', {
+                params: { '$filter': `uuid eq '${companyUuid}'` },
+              });
+              const companyDetails = companyResp.data[0] || {};
+              addressDetails = {
+                address1: companyDetails.billing_address || '',
+                city: companyDetails.billing_city || '',
+                state: companyDetails.billing_state || '',
+                postalCode: companyDetails.billing_postcode || '',
+              };
+              console.log(`Fetched company address for ${companyUuid}:`, addressDetails);
+            } catch (error) {
+              console.error(`Error fetching company details for ${companyUuid}:`, error.response ? error.response.data : error.message);
+            }
+
+            // Create new contact in GHL
+            const contactName = `${primaryContact.first || ''} ${primaryContact.last || ''}`.trim();
+            const ghlContactResponse = await ghlApi.post('/contacts/', {
+              firstName: primaryContact.first || '',
+              lastName: primaryContact.last || '',
+              name: contactName || 'Unknown',
+              email: clientEmail,
+              phone: primaryContact.phone || primaryContact.mobile || '',
+              address1: addressDetails.address1,
+              city: addressDetails.city,
+              state: addressDetails.state,
+              postalCode: addressDetails.postalCode,
+              source: 'ServiceM8 Integration',
+            });
+
+            ghlContactId = ghlContactResponse.data.contact.id;
+            console.log(`Created GHL contact: ${ghlContactId} for email ${clientEmail}`);
+
+            // Optionally update ServiceM8 job description with GHL Contact ID
+            try {
+              await serviceM8Api.put(`/job/${jobUuid}.json`, {
+                job_description: `${job.job_description}\nGHL Contact ID: ${ghlContactId}`,
+              });
+              console.log(`Updated job ${jobUuid} description with GHL Contact ID: ${ghlContactId}`);
+            } catch (updateError) {
+              console.error(`Failed to update job ${jobUuid} description:`, updateError.response ? updateError.response.data : updateError.message);
+            }
+          }
+        } catch (error) {
+          console.error(`Error handling GHL contact for email ${clientEmail}:`, error.response ? error.response.data : error.message);
+          continue; // Skip if cannot find or create contact
+        }
+      } else if (!ghlContactId && !clientEmail) {
+        console.log(`No GHL Contact ID or email for job ${jobUuid}, skipping webhook.`);
+        continue;
       }
 
       const contactKey = ghlContactId || clientEmail;
@@ -623,9 +693,7 @@ const checkJobCompletions = async () => {
         continue;
       }
 
-      if (
-        completionDate.isAfter(moment(twentyFourHoursAgo).tz(accountTimezone))
-      ) {
+      if (completionDate.isAfter(moment(twentyFourHoursAgo).tz(accountTimezone))) {
         console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         const webhookPayload = {
           jobUuid: jobUuid,
@@ -664,7 +732,6 @@ const checkJobCompletions = async () => {
     console.error('Error checking job completions:', error.response ? error.response.data : error.message);
   }
 };
-
 // Helper function to get file extension from MIME type
 function getFileExtensionFromMime(mime) {
   const mimeToExt = {
