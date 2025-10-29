@@ -414,16 +414,21 @@ const checkNewContacts = async () => {
     const currentTimestamp = Date.now();
 
     const accountTimezone = 'Australia/Brisbane';
-    const lastEditTime = lastPollTimestamp ? moment(lastPollTimestamp).tz(accountTimezone).format('YYYY-MM-DD HH:mm:ss') : '1970-01-01 00:00:00';
-    const filter = `$filter=edit_date gt '${lastEditTime}'`;
+    const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
 
-    const contacts = await fetchAll('companycontact.json', { '$filter': filter });
-    console.log(`Fetched ${contacts.length} new or updated contacts from ServiceM8`);
+    const contacts = await fetchAll('companycontact.json');
+    console.log(`Fetched ${contacts.length} contacts from ServiceM8`);
 
     for (const contact of contacts) {
       const contactUuid = contact.uuid;
       if (processedContacts.has(contactUuid)) {
         console.log(`Contact ${contactUuid} already processed, skipping.`);
+        continue;
+      }
+
+      const editDate = moment(contact.edit_date).tz(accountTimezone);
+      if (!editDate.isValid() || editDate.isBefore(lastEditMoment)) {
+        console.log(`Contact ${contactUuid} not recently updated, skipping.`);
         continue;
       }
 
@@ -524,21 +529,23 @@ const checkJobCompletions = async () => {
 
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
-    const twentyFourHoursAgo = now.clone().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
-    const lastEditTime = lastPollTimestamp ? moment(lastPollTimestamp).tz(accountTimezone).format('YYYY-MM-DD HH:mm:ss') : '1970-01-01 00:00:00';
-    const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
-    console.log(`Checking jobs edited after ${lastEditTime} and completed on or after ${targetDate}`);
+    const twentyFourHoursAgo = now.clone().subtract(24, 'hours');
+    const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
+    const targetDate = moment('2025-10-20').tz(accountTimezone).startOf('day');
 
-    const jobFilter = `$filter=edit_date gt '${lastEditTime}' and status eq 'Completed'`;
-    const jobs = await fetchAll('job.json', { '$filter': jobFilter });
-    console.log(`Fetched ${jobs.length} completed jobs edited since last poll`);
+    const completedJobs = await fetchAll('job.json', { '$filter': "status eq 'Completed'" });
+    console.log(`Fetched ${completedJobs.length} completed jobs from ServiceM8`);
 
-    for (const job of jobs) {
+    for (const job of completedJobs) {
       const jobUuid = job.uuid;
-      console.log(`Processing job ${jobUuid}`);
-
       if (processedJobs.has(jobUuid)) {
         console.log(`Job ${jobUuid} already processed, skipping.`);
+        continue;
+      }
+
+      const editDate = moment(job.edit_date).tz(accountTimezone);
+      if (!editDate.isValid() || editDate.isBefore(lastEditMoment)) {
+        console.log(`Job ${jobUuid} not recently updated, skipping.`);
         continue;
       }
 
@@ -552,13 +559,14 @@ const checkJobCompletions = async () => {
         for (const activity of jobActivities) {
           if (activity.end_date) {
             console.log(`Activity for job ${jobUuid}: end_date=${activity.end_date}`);
-            if (!maxEndDate || moment(activity.end_date).tz(accountTimezone).isAfter(moment(maxEndDate).tz(accountTimezone))) {
-              maxEndDate = activity.end_date;
+            const endDateMoment = moment(activity.end_date).tz(accountTimezone);
+            if (!maxEndDate || endDateMoment.isAfter(maxEndDate)) {
+              maxEndDate = endDateMoment;
             }
           }
         }
         if (maxEndDate) {
-          completionDate = moment(maxEndDate).tz(accountTimezone);
+          completionDate = maxEndDate;
           console.log(`Using job activity end_date as completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         } else {
           completionDate = moment(job.edit_date).tz(accountTimezone);
@@ -574,9 +582,8 @@ const checkJobCompletions = async () => {
         console.log(`No completion date available for job ${jobUuid}, skipping.`);
         continue;
       }
-      const targetMoment = moment(targetDate).tz(accountTimezone);
-      console.log(`Job ${jobUuid} completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}, target: ${targetMoment.format('YYYY-MM-DD HH:mm:ss')}`);
-      if (!completionDate.isSameOrAfter(targetMoment)) {
+      console.log(`Job ${jobUuid} completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}, target: ${targetDate.format('YYYY-MM-DD HH:mm:ss')}`);
+      if (!completionDate.isSameOrAfter(targetDate)) {
         console.log(`Job ${jobUuid} not completed on or after May 24, 2025, skipping.`);
         continue;
       }
@@ -696,7 +703,7 @@ const checkJobCompletions = async () => {
         continue;
       }
 
-      if (completionDate.isAfter(moment(twentyFourHoursAgo).tz(accountTimezone))) {
+      if (completionDate.isAfter(twentyFourHoursAgo)) {
         console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         const webhookPayload = {
           jobUuid: jobUuid,
