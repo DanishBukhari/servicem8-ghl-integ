@@ -317,6 +317,20 @@ const serviceM8Api = axios.create({
   headers: { Accept: 'application/json', 'X-API-Key': SERVICE_M8_API_KEY },
 });
 
+// Function to fetch all records with pagination
+async function fetchAll(endpoint, queryParams = {}) {
+  let results = [];
+  let cursor = '-1';
+  while (cursor) {
+    const params = new URLSearchParams(queryParams);
+    params.append('cursor', cursor);
+    const response = await serviceM8Api.get(`/${endpoint}?${params.toString()}`);
+    results = results.concat(response.data);
+    cursor = response.headers['x-next-cursor'] || null;
+  }
+  return results;
+}
+
 // Axios instance for GHL v1 API (using API key)
 const ghlApi = axios.create({
   baseURL: 'https://rest.gohighlevel.com/v1',
@@ -400,12 +414,10 @@ const checkNewContacts = async () => {
     const currentTimestamp = Date.now();
 
     const accountTimezone = 'Australia/Brisbane';
-    const now = moment().tz(accountTimezone);
-    const twentyMinutesAgo = now.clone().subtract(20, 'minutes').format('YYYY-MM-DD HH:mm:ss');
-    const filter = `$filter=edit_date gt '${twentyMinutesAgo}'`;
+    const lastEditTime = lastPollTimestamp ? moment(lastPollTimestamp).tz(accountTimezone).format('YYYY-MM-DD HH:mm:ss') : '1970-01-01 00:00:00';
+    const filter = `$filter=edit_date gt '${lastEditTime}'`;
 
-    const contactsResponse = await serviceM8Api.get(`/companycontact.json?${filter}`);
-    const contacts = contactsResponse.data;
+    const contacts = await fetchAll('companycontact.json', { '$filter': filter });
     console.log(`Fetched ${contacts.length} new or updated contacts from ServiceM8`);
 
     for (const contact of contacts) {
@@ -455,16 +467,13 @@ const checkNewContacts = async () => {
 
       let addressDetails = {};
       try {
-        const companyResponse = await serviceM8Api.get('/company.json', {
-          params: { '$filter': `uuid eq '${company_uuid}'` },
-        });
-
-        const company = companyResponse.data[0] || {};
+        const company = await fetchAll('company.json', { '$filter': `uuid eq '${company_uuid}'` });
+        const companyDetails = company[0] || {};
         addressDetails = {
-          address1: company.billing_address || '',
-          city: company.billing_city || '',
-          state: company.billing_state || '',
-          postalCode: company.billing_postcode || '',
+          address1: companyDetails.billing_address || '',
+          city: companyDetails.billing_city || '',
+          state: companyDetails.billing_state || '',
+          postalCode: companyDetails.billing_postcode || '',
         };
         console.log(`Fetched company address for ${company_uuid}:`, addressDetails);
       } catch (error) {
@@ -507,22 +516,22 @@ const checkNewContacts = async () => {
 };
 
 // Check job completions and trigger GHL webhook for review requests
-// Check job completions and trigger GHL webhook for review requests
 const checkJobCompletions = async () => {
   try {
     console.log('Starting job completion check...');
+    const lastPollTimestamp = await loadState();
     const currentTimestamp = Date.now();
 
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
     const twentyFourHoursAgo = now.clone().subtract(24, 'hours').format('YYYY-MM-DD HH:mm:ss');
+    const lastEditTime = lastPollTimestamp ? moment(lastPollTimestamp).tz(accountTimezone).format('YYYY-MM-DD HH:mm:ss') : '1970-01-01 00:00:00';
     const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day').format('YYYY-MM-DDTHH:mm:ss');
-    console.log(`Checking jobs edited after ${twentyFourHoursAgo} and completed on or after ${targetDate}`);
+    console.log(`Checking jobs edited after ${lastEditTime} and completed on or after ${targetDate}`);
 
-    const jobFilter = `$filter=edit_date gt '${twentyFourHoursAgo}' and status eq 'Completed'`;
-    const jobsResponse = await serviceM8Api.get(`/job.json?${jobFilter}`);
-    const jobs = jobsResponse.data;
-    console.log(`Fetched ${jobs.length} completed jobs edited in the last 24 hours`);
+    const jobFilter = `$filter=edit_date gt '${lastEditTime}' and status eq 'Completed'`;
+    const jobs = await fetchAll('job.json', { '$filter': jobFilter });
+    console.log(`Fetched ${jobs.length} completed jobs edited since last poll`);
 
     for (const job of jobs) {
       const jobUuid = job.uuid;
@@ -537,8 +546,7 @@ const checkJobCompletions = async () => {
 
       let completionDate = null;
       try {
-        const jobActivitiesResponse = await serviceM8Api.get(`/jobactivity.json?$filter=job_uuid eq '${jobUuid}'`);
-        const jobActivities = jobActivitiesResponse.data;
+        const jobActivities = await fetchAll('jobactivity.json', { '$filter': `job_uuid eq '${jobUuid}'` });
         console.log(`Fetched ${jobActivities.length} activities for job ${jobUuid}`);
         let maxEndDate = null;
         for (const activity of jobActivities) {
@@ -587,8 +595,8 @@ const checkJobCompletions = async () => {
         }
       }
 
-      if (categoryName === 'real estate agents' || categoryName === 'property managers') {
-        console.log(`Skipping webhook for job ${jobUuid} as category is Real Estate Agents or Property Managers`);
+      if (categoryName.includes('real estate agent') || categoryName.includes('property manager')) {
+        console.log(`Skipping webhook for job ${jobUuid} as category includes Real Estate Agent or Property Manager`);
         processedJobs.add(jobUuid);
         continue;
       }
@@ -608,10 +616,7 @@ const checkJobCompletions = async () => {
       let clientEmail = '';
       let primaryContact = {};
       try {
-        const companyResponse = await serviceM8Api.get('/companycontact.json', {
-          params: { '$filter': `company_uuid eq '${companyUuid}'` },
-        });
-        const contacts = companyResponse.data;
+        const contacts = await fetchAll('companycontact.json', { '$filter': `company_uuid eq '${companyUuid}'` });
         primaryContact = contacts.find(c => c.email) || contacts[0] || {};
         clientEmail = (primaryContact.email || '').trim().toLowerCase();
         console.log(`Extracted client email: ${clientEmail} for company ${companyUuid}`);
@@ -635,10 +640,8 @@ const checkJobCompletions = async () => {
             // Fetch company details for address
             let addressDetails = {};
             try {
-              const companyResp = await serviceM8Api.get('/company.json', {
-                params: { '$filter': `uuid eq '${companyUuid}'` },
-              });
-              const companyDetails = companyResp.data[0] || {};
+              const company = await fetchAll('company.json', { '$filter': `uuid eq '${companyUuid}'` });
+              const companyDetails = company[0] || {};
               addressDetails = {
                 address1: companyDetails.billing_address || '',
                 city: companyDetails.billing_city || '',
@@ -780,8 +783,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       return res.status(500).json({ error: 'Failed to fetch "To Be Quoted (Desk Quote)" queue UUID' });
     }
 
-    const companiesResponse = await serviceM8Api.get('/company.json');
-    const companies = companiesResponse.data;
+    const companies = await fetchAll('company.json');
     console.log(`Fetched ${companies.length} companies from ServiceM8`);
 
     let companyUuid;
@@ -806,8 +808,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       console.log(`Client created: ${companyUuid} for email ${email} with phone ${phone}`);
     }
 
-    const contactsResponse = await serviceM8Api.get(`/companycontact.json?$filter=company_uuid eq '${companyUuid}'`);
-    const existingContacts = contactsResponse.data;
+    const existingContacts = await fetchAll('companycontact.json', { '$filter': `company_uuid eq '${companyUuid}'` });
     const matchingContact = existingContacts.find((contact) => {
       const contactEmail = (contact.email || '').toLowerCase().trim();
       const contactName = `${contact.first || ''} ${contact.last || ''}`.trim().toLowerCase();
@@ -1110,8 +1111,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
 
     let companyUuid;
     try {
-      const companiesResponse = await serviceM8Api.get('/company.json');
-      const companies = companiesResponse.data;
+      const companies = await fetchAll('company.json');
       const matchingCompany = companies.find(
         (c) =>
           (c.email ? c.email.toLowerCase().trim() : '') === contactEmail ||
@@ -1192,9 +1192,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     // Function to check staff availability
     const isStaffAvailable = async (staffUuid) => {
       try {
-        const filter = `$filter=staff_uuid eq '${staffUuid}'`;
-        const activitiesResponse = await serviceM8Api.get(`/jobactivity.json?${filter}`);
-        const activities = activitiesResponse.data;
+        const activities = await fetchAll('jobactivity.json', { '$filter': `staff_uuid eq '${staffUuid}'` });
 
         console.log(`Fetched ${activities.length} activities for staff ${staffUuid}`);
 
@@ -1307,12 +1305,12 @@ app.get('/test-contact/:id', async (req, res) => {
 
 
 // Schedule polling
-cron.schedule('*/20 * * * *', () => {
+cron.schedule('0 */6 * * *', () => {
   console.log('Scheduled polling for new contacts...');
   checkNewContacts();
 });
 
-cron.schedule('0 0 * * *', () => {
+cron.schedule('0 */6 * * *', () => {
   console.log('Scheduled polling for job completions...');
   checkJobCompletions();
 });
