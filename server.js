@@ -739,6 +739,7 @@ const checkJobCompletions = async () => {
         const webhookPayload = {
           jobUuid: jobUuid,
           clientEmail: clientEmail || '',
+          phone: clientPhone,
           ghlContactId: ghlContactId,
           status: 'Job Completed',
         };
