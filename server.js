@@ -692,18 +692,26 @@ const checkJobCompletions = async () => {
                 continue;
               }
 
-              const ghlContactResponse = await ghlApi.post('/contacts/', {
+              const payload = {
                 firstName: primaryContact.first || '',
                 lastName: primaryContact.last || '',
                 name: contactName || 'Unknown',
-                email: clientEmail,
-                phone: clientPhone,
                 address1: addressDetails.address1,
                 city: addressDetails.city,
                 state: addressDetails.state,
                 postalCode: addressDetails.postalCode,
                 source: 'ServiceM8 Integration',
-              });
+              };
+
+              if (clientEmail) {
+                payload.email = clientEmail;
+              }
+
+              if (clientPhone) {
+                payload.phone = clientPhone;
+              }
+
+              const ghlContactResponse = await ghlApi.post('/contacts/', payload);
 
               ghlContactId = ghlContactResponse.data.contact.id;
               console.log(`Created GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone}`);
@@ -738,8 +746,8 @@ const checkJobCompletions = async () => {
         console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         const webhookPayload = {
           jobUuid: jobUuid,
-          // clientEmail: clientEmail || '',
-          phone: clientPhone,
+          clientEmail: clientEmail || '',
+          phone: clientPhone || '',
           ghlContactId: ghlContactId,
           status: 'Job Completed',
         };
