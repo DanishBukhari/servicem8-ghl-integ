@@ -539,7 +539,6 @@ const checkNewContacts = async () => {
   }
 };
 // Check job completions and trigger GHL webhook for review requests
-// Check job completions and trigger GHL webhook for review requests
 const checkJobCompletions = async () => {
   try {
     console.log('Starting job completion check...');
@@ -644,7 +643,7 @@ const checkJobCompletions = async () => {
       let primaryContact = {};
       try {
         const contacts = await fetchAll('companycontact.json', { '$filter': `company_uuid eq '${companyUuid}'` });
-        primaryContact = contacts.find(c => c.email) || contacts[0] || {};
+        primaryContact = contacts.find(c => c.email) || contacts.find(c => c.phone || c.mobile) || contacts[0] || {};
         clientEmail = (primaryContact.email || '').trim().toLowerCase();
         clientPhone = (primaryContact.phone || primaryContact.mobile || '').trim();
         console.log(`Extracted client email: ${clientEmail}, phone: ${clientPhone} for company ${companyUuid}`);
@@ -657,65 +656,71 @@ const checkJobCompletions = async () => {
       if (!ghlContactId) {
         try {
           let searchQuery = clientEmail || clientPhone || contactName;
-          const searchResponse = await ghlApi.get('/contacts/', {
-            params: { query: searchQuery },
-          });
-
-          const existingContact = searchResponse.data.contacts.find(
-            (c) => (c.email || '').toLowerCase().trim() === clientEmail ||
-                   (c.phone || '').trim() === clientPhone
-          );
-          if (existingContact) {
-            ghlContactId = existingContact.id;
-            console.log(`Found existing GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone}`);
-          } else {
-            // Fetch company details for address
-            let addressDetails = {};
-            try {
-              const company = await fetchAll('company.json', { '$filter': `uuid eq '${companyUuid}'` });
-              const companyDetails = company[0] || {};
-              addressDetails = {
-                address1: companyDetails.billing_address || '',
-                city: companyDetails.billing_city || '',
-                state: companyDetails.billing_state || '',
-                postalCode: companyDetails.billing_postcode || '',
-              };
-              console.log(`Fetched company address for ${companyUuid}:`, addressDetails);
-            } catch (error) {
-              console.error(`Error fetching company details for ${companyUuid}:`, error.response ? error.response.data : error.message);
-            }
-
-            // Create new contact in GHL if at least email or phone is present
-            if (!clientEmail && !clientPhone) {
-              console.log(`No email or phone for job ${jobUuid}, skipping creation and webhook.`);
-              continue;
-            }
-
-            const ghlContactResponse = await ghlApi.post('/contacts/', {
-              firstName: primaryContact.first || '',
-              lastName: primaryContact.last || '',
-              name: contactName || 'Unknown',
-              email: clientEmail,
-              phone: clientPhone,
-              address1: addressDetails.address1,
-              city: addressDetails.city,
-              state: addressDetails.state,
-              postalCode: addressDetails.postalCode,
-              source: 'ServiceM8 Integration',
+          if (searchQuery) {
+            const searchResponse = await ghlApi.get('/contacts/', {
+              params: { query: searchQuery },
             });
 
-            ghlContactId = ghlContactResponse.data.contact.id;
-            console.log(`Created GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone}`);
+            const existingContact = searchResponse.data.contacts.find(
+              (c) => (c.email || '').toLowerCase().trim() === clientEmail ||
+                     (c.phone || '').trim() === clientPhone ||
+                     c.name.toLowerCase().trim() === contactName.toLowerCase()
+            );
+            if (existingContact) {
+              ghlContactId = existingContact.id;
+              console.log(`Found existing GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone} or name ${contactName}`);
+            } else {
+              // Fetch company details for address
+              let addressDetails = {};
+              try {
+                const company = await fetchAll('company.json', { '$filter': `uuid eq '${companyUuid}'` });
+                const companyDetails = company[0] || {};
+                addressDetails = {
+                  address1: companyDetails.billing_address || '',
+                  city: companyDetails.billing_city || '',
+                  state: companyDetails.billing_state || '',
+                  postalCode: companyDetails.billing_postcode || '',
+                };
+                console.log(`Fetched company address for ${companyUuid}:`, addressDetails);
+              } catch (error) {
+                console.error(`Error fetching company details for ${companyUuid}:`, error.response ? error.response.data : error.message);
+              }
 
-            // Optionally update ServiceM8 job description with GHL Contact ID
-            try {
-              await serviceM8Api.put(`/job/${jobUuid}.json`, {
-                job_description: `${job.job_description}\nGHL Contact ID: ${ghlContactId}`,
+              // Create new contact in GHL if at least email or phone is present
+              if (!clientEmail && !clientPhone) {
+                console.log(`No email or phone for job ${jobUuid}, skipping creation and webhook.`);
+                continue;
+              }
+
+              const ghlContactResponse = await ghlApi.post('/contacts/', {
+                firstName: primaryContact.first || '',
+                lastName: primaryContact.last || '',
+                name: contactName || 'Unknown',
+                email: clientEmail,
+                phone: clientPhone,
+                address1: addressDetails.address1,
+                city: addressDetails.city,
+                state: addressDetails.state,
+                postalCode: addressDetails.postalCode,
+                source: 'ServiceM8 Integration',
               });
-              console.log(`Updated job ${jobUuid} description with GHL Contact ID: ${ghlContactId}`);
-            } catch (updateError) {
-              console.error(`Failed to update job ${jobUuid} description:`, updateError.response ? updateError.response.data : updateError.message);
+
+              ghlContactId = ghlContactResponse.data.contact.id;
+              console.log(`Created GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone}`);
+
+              // Optionally update ServiceM8 job description with GHL Contact ID
+              try {
+                await serviceM8Api.put(`/job/${jobUuid}.json`, {
+                  job_description: `${job.job_description}\nGHL Contact ID: ${ghlContactId}`,
+                });
+                console.log(`Updated job ${jobUuid} description with GHL Contact ID: ${ghlContactId}`);
+              } catch (updateError) {
+                console.error(`Failed to update job ${jobUuid} description:`, updateError.response ? updateError.response.data : updateError.message);
+              }
             }
+          } else {
+            console.log(`No search query available for job ${jobUuid}, skipping webhook.`);
+            continue;
           }
         } catch (error) {
           console.error(`Error handling GHL contact:`, error.response ? error.response.data : error.message);
