@@ -493,7 +493,7 @@ const checkNewContacts = async () => {
           firstName: first || '',
           lastName: last || '',
           name: contactName,
-          email: trimmedEmail,
+          email: trimmedEmail || '',
           phone: phone || mobile || '',
           address1: addressDetails.address1,
           city: addressDetails.city,
