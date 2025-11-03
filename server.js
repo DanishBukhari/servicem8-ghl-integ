@@ -406,6 +406,7 @@ function saveProcessedAppointments(processed) {
   fs.writeFileSync(PROCESSED_APPT_FILE, JSON.stringify([...processed], null, 2));
 }
 // Check new ServiceM8 contacts and sync to GHL
+// Check new ServiceM8 contacts and sync to GHL
 const checkNewContacts = async () => {
   try {
     console.log('Starting contact polling...');
@@ -445,27 +446,37 @@ const checkNewContacts = async () => {
         continue;
       }
 
-      let ghlContactId = null;
       const trimmedEmail = (email || '').trim();
+      const contactPhone = (phone || mobile || '').trim();
+
+      if (!trimmedEmail && !contactPhone) {
+        console.log(`No email or phone for contact ${contactUuid}, skipping GHL creation.`);
+        processedContacts.add(contactUuid);
+        continue;
+      }
+
+      let ghlContactId = null;
       try {
-        if (trimmedEmail) {
+        const searchQuery = trimmedEmail || contactPhone;
+        if (searchQuery) {
           const searchResponse = await ghlApi.get('/contacts/', {
-            params: { query: trimmedEmail },
+            params: { query: searchQuery },
           });
 
           const existingContact = searchResponse.data.contacts.find(
-            (c) => (c.email || '').toLowerCase().trim() === trimmedEmail.toLowerCase()
+            (c) => (c.email || '').toLowerCase().trim() === trimmedEmail.toLowerCase() ||
+                   (c.phone || '').trim() === contactPhone
           );
           if (existingContact) {
             ghlContactId = existingContact.id;
-            console.log(`Contact already exists in GHL: ${ghlContactId} for email ${trimmedEmail}`);
+            console.log(`Contact already exists in GHL: ${ghlContactId} for ${trimmedEmail ? `email ${trimmedEmail}` : `phone ${contactPhone}`}`);
             processedContacts.add(contactUuid);
             continue;
           }
         }
       } catch (error) {
         console.error(
-          `Error checking GHL contact for email ${trimmedEmail}:`,
+          `Error checking GHL contact:`,
           error.response ? error.response.data : error.message
         );
       }
@@ -489,21 +500,29 @@ const checkNewContacts = async () => {
       }
 
       try {
-        const ghlContactResponse = await ghlApi.post('/contacts/', {
+        const payload = {
           firstName: first || '',
           lastName: last || '',
           name: contactName,
-          email: trimmedEmail || '',
-          phone: phone || mobile || '',
           address1: addressDetails.address1,
           city: addressDetails.city,
           state: addressDetails.state,
           postalCode: addressDetails.postalCode,
           source: 'ServiceM8 Integration',
-        });
+        };
+
+        if (trimmedEmail) {
+          payload.email = trimmedEmail;
+        }
+
+        if (contactPhone) {
+          payload.phone = contactPhone;
+        }
+
+        const ghlContactResponse = await ghlApi.post('/contacts/', payload);
 
         ghlContactId = ghlContactResponse.data.contact.id;
-        console.log(`Created GHL contact: ${ghlContactId} for email ${trimmedEmail}`);
+        console.log(`Created GHL contact: ${ghlContactId} for ${trimmedEmail ? `email ${trimmedEmail}` : `phone ${contactPhone}`}`);
         processedContacts.add(contactUuid);
       } catch (error) {
         console.error(
