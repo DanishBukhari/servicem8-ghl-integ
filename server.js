@@ -738,7 +738,7 @@ const checkJobCompletions = async () => {
         console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
         const webhookPayload = {
           jobUuid: jobUuid,
-          clientEmail: clientEmail || '',
+          // clientEmail: clientEmail || '',
           phone: clientPhone,
           ghlContactId: ghlContactId,
           status: 'Job Completed',
