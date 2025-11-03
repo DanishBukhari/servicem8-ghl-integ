@@ -406,6 +406,7 @@ function saveProcessedAppointments(processed) {
   fs.writeFileSync(PROCESSED_APPT_FILE, JSON.stringify([...processed], null, 2));
 }
 // Check new ServiceM8 contacts and sync to GHL
+// Check new ServiceM8 contacts and sync to GHL
 const checkNewContacts = async () => {
   try {
     console.log('Starting contact polling...');
@@ -493,7 +494,7 @@ const checkNewContacts = async () => {
           firstName: first || '',
           lastName: last || '',
           name: contactName,
-          email: trimmedEmail || '',
+          email: trimmedEmail,
           phone: phone || mobile || '',
           address1: addressDetails.address1,
           city: addressDetails.city,
@@ -519,6 +520,7 @@ const checkNewContacts = async () => {
     console.error('Error polling contacts:', error.response ? error.response.data : error.message);
   }
 };
+
 // Check job completions and trigger GHL webhook for review requests
 const checkJobCompletions = async () => {
   try {
@@ -530,7 +532,7 @@ const checkJobCompletions = async () => {
     const now = moment().tz(accountTimezone);
     const twentyFourHoursAgo = now.clone().subtract(24, 'hours');
     const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
-    const targetDate = moment('2025-10-20').tz(accountTimezone).startOf('day');
+    const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day');
 
     const completedJobs = await fetchAll('job.json', { '$filter': "status eq 'Completed'" });
     console.log(`Fetched ${completedJobs.length} completed jobs from ServiceM8`);
@@ -794,7 +796,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
 
     let companyUuid;
     const fullName = `${firstName} ${lastName}`.trim().toLowerCase();
-    const inputEmail = (email || '').toLowerCase().trim();
+    const inputEmail = (email || '').trim().toLowerCase();
     const matchingCompany = companies.find((company) => {
       const companyEmail = (company.email || '').toLowerCase().trim();
       const companyName = (company.name || '').toLowerCase().trim();
@@ -826,7 +828,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
         company_uuid: companyUuid,
         first: firstName,
         last: lastName,
-        email: email,
+        email: inputEmail,
       };
       if (phone) {
         assignPhoneFields(companyContactData, phone);
@@ -906,7 +908,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
       type: 'Job Contact',
       first: firstName,
       last: lastName,
-      email: email,
+      email: inputEmail,
     };
     if (phone) {
       assignPhoneFields(jobContactData, phone);
@@ -1113,7 +1115,7 @@ app.post('/ghl-appointment-sync', async (req, res) => {
     const firstName = contact.firstName ? contact.firstName.charAt(0).toUpperCase() + contact.firstName.slice(1).toLowerCase() : '';
     const lastName = contact.lastName ? contact.lastName.charAt(0).toUpperCase() + contact.lastName.slice(1).toLowerCase() : '';
     const contactName = `${firstName} ${lastName}`.trim().toLowerCase();
-    const contactEmail = (contact.email || '').toLowerCase().trim();
+    const contactEmail = (contact.email || '').trim().toLowerCase();
 
     let companyUuid;
     try {
