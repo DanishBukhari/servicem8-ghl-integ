@@ -547,7 +547,7 @@ const checkJobCompletions = async () => {
 
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
-    const twentyFourHoursAgo = now.clone().subtract(24, 'hours');
+    const twentyFourHoursAgo = now.clone().subtract(96, 'hours');
     const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
     const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day');
 
