@@ -549,7 +549,7 @@ const checkJobCompletions = async () => {
     const now = moment().tz(accountTimezone);
     const twentyFourHoursAgo = now.clone().subtract(96, 'hours');
     const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
-    const targetDate = moment('2025-08-20').tz(accountTimezone).startOf('day');
+    const targetDate = moment('2025-11-11').tz(accountTimezone).startOf('day');
 
     const completedJobs = await fetchAll('job.json', { '$filter': "status eq 'Completed'" });
     console.log(`Fetched ${completedJobs.length} completed jobs from ServiceM8`);
