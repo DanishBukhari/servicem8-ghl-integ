@@ -113,6 +113,9 @@ async function saveTokens(tokens) {
 /**
  * Load tokens: prefer Heroku config vars when available, fallback to tokens.json
  */
+/**
+ * Load tokens: prefer Heroku config vars when available, fallback to tokens.json
+ */
 function loadTokens() {
   // If Heroku config vars present, load from them
   if (process.env.GHL_ACCESS_TOKEN && process.env.GHL_REFRESH_TOKEN) {
@@ -121,7 +124,7 @@ function loadTokens() {
       access_token: process.env.GHL_ACCESS_TOKEN,
       refresh_token: process.env.GHL_REFRESH_TOKEN,
       created_at: parseInt(process.env.GHL_TOKEN_CREATED_AT, 10) || Math.floor(Date.now() / 1000),
-      expires_in: parseInt(process.env.GHL_TOKEN_EXPIRES_IN, 10) || 3600,
+      expires_in: 86400,   // ← GHL access token is valid for 24 hours
     };
   }
 
@@ -131,6 +134,8 @@ function loadTokens() {
       console.log("Loading tokens from tokens.json");
       const raw = fs.readFileSync(TOKEN_FILE, "utf8");
       const parsed = JSON.parse(raw);
+      // Ensure correct expiry
+      if (!parsed.expires_in || parsed.expires_in < 86400) parsed.expires_in = 86400;
       return parsed;
     } catch (err) {
       console.error("Error reading tokens.json:", err.message);
@@ -141,7 +146,6 @@ function loadTokens() {
   console.log("No tokens found");
   return null;
 }
-
 // OAuth: Redirect to GHL auth page
 app.get('/auth', (req, res) => {
   const url = `https://marketplace.gohighlevel.com/oauth/chooselocation?response_type=code&client_id=${CLIENT_ID}&redirect_uri=${encodeURIComponent(
@@ -547,9 +551,8 @@ const checkJobCompletions = async () => {
 
     const accountTimezone = 'Australia/Brisbane';
     const now = moment().tz(accountTimezone);
-    const twentyFourHoursAgo = now.clone().subtract(44, 'hours');
+    const twentyFourHoursAgo = now.clone().subtract(24, 'hours');
     const lastEditMoment = moment(lastPollTimestamp).tz(accountTimezone);
-    const targetDate = moment('2025-11-11').tz(accountTimezone).startOf('day');
 
     const completedJobs = await fetchAll('job.json', { '$filter': "status eq 'Completed'" });
     console.log(`Fetched ${completedJobs.length} completed jobs from ServiceM8`);
@@ -576,7 +579,6 @@ const checkJobCompletions = async () => {
         let maxEndDate = null;
         for (const activity of jobActivities) {
           if (activity.end_date) {
-            console.log(`Activity for job ${jobUuid}: end_date=${activity.end_date}`);
             const endDateMoment = moment(activity.end_date).tz(accountTimezone);
             if (!maxEndDate || endDateMoment.isAfter(maxEndDate)) {
               maxEndDate = endDateMoment;
@@ -600,9 +602,10 @@ const checkJobCompletions = async () => {
         console.log(`No completion date available for job ${jobUuid}, skipping.`);
         continue;
       }
-      console.log(`Job ${jobUuid} completion date: ${completionDate.format('YYYY-MM-DD HH:mm:ss')}, target: ${targetDate.format('YYYY-MM-DD HH:mm:ss')}`);
-      if (!completionDate.isSameOrAfter(targetDate)) {
-        console.log(`Job ${jobUuid} not completed on or after May 24, 2025, skipping.`);
+
+      // ONLY check jobs completed in the last 24 hours
+      if (!completionDate.isAfter(twentyFourHoursAgo)) {
+        console.log(`Job ${jobUuid} is older than 24 hours, skipping.`);
         continue;
       }
 
@@ -632,6 +635,7 @@ const checkJobCompletions = async () => {
         ghlContactId = ghlContactIdMatch ? ghlContactIdMatch[1] : '';
         console.log(`Extracted GHL Contact ID: ${ghlContactId} for job ${jobUuid}`);
       }
+
       const companyUuid = job.company_uuid;
       if (!companyUuid) {
         console.log(`No company_uuid for job ${jobUuid}, skipping.`);
@@ -670,7 +674,6 @@ const checkJobCompletions = async () => {
               ghlContactId = existingContact.id;
               console.log(`Found existing GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone} or name ${contactName}`);
             } else {
-              // Fetch company details for address
               let addressDetails = {};
               try {
                 const company = await fetchAll('company.json', { '$filter': `uuid eq '${companyUuid}'` });
@@ -686,7 +689,6 @@ const checkJobCompletions = async () => {
                 console.error(`Error fetching company details for ${companyUuid}:`, error.response ? error.response.data : error.message);
               }
 
-              // Create new contact in GHL if at least email or phone is present
               if (!clientEmail && !clientPhone) {
                 console.log(`No email or phone for job ${jobUuid}, skipping creation and webhook.`);
                 continue;
@@ -703,20 +705,14 @@ const checkJobCompletions = async () => {
                 source: 'ServiceM8 Integration',
               };
 
-              if (clientEmail) {
-                payload.email = clientEmail;
-              }
-
-              if (clientPhone) {
-                payload.phone = clientPhone;
-              }
+              if (clientEmail) payload.email = clientEmail;
+              if (clientPhone) payload.phone = clientPhone;
 
               const ghlContactResponse = await ghlApi.post('/contacts/', payload);
 
               ghlContactId = ghlContactResponse.data.contact.id;
               console.log(`Created GHL contact: ${ghlContactId} for email ${clientEmail} or phone ${clientPhone}`);
 
-              // Optionally update ServiceM8 job description with GHL Contact ID
               try {
                 await serviceM8Api.put(`/job/${jobUuid}.json`, {
                   job_description: `${job.job_description}\nGHL Contact ID: ${ghlContactId}`,
@@ -732,7 +728,7 @@ const checkJobCompletions = async () => {
           }
         } catch (error) {
           console.error(`Error handling GHL contact:`, error.response ? error.response.data : error.message);
-          continue; // Skip if cannot find or create contact
+          continue;
         }
       }
 
@@ -742,37 +738,27 @@ const checkJobCompletions = async () => {
         continue;
       }
 
-      if (completionDate.isAfter(twentyFourHoursAgo)) {
-        console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
-        const webhookPayload = {
-          jobUuid: jobUuid,
-          clientEmail: clientEmail || '',
-          phone: clientPhone || '',
-          ghlContactId: ghlContactId,
-          status: 'Job Completed',
-        };
-        try {
-          const webhookResponse = await axios.post(GHL_WEBHOOK_URL, webhookPayload, {
-            headers: {
-              Authorization: `Bearer ${await getAccessToken()}`,
-              'Content-Type': 'application/json',
-            },
-          });
-          console.log(
-            `GHL webhook triggered for job ${jobUuid}: status=${webhookResponse.status}, response=${JSON.stringify(webhookResponse.data)}`
-          );
-          processedJobs.add(jobUuid);
-          if (contactKey) processedContacts.add(contactKey);
-        } catch (webhookError) {
-          console.error(
-            `Failed to trigger GHL webhook for job ${jobUuid}:`,
-            webhookError.response ? webhookError.response.data : webhookError.message
-          );
-        }
-      } else {
-        console.log(`Job ${jobUuid} is not recently completed, skipping. Details:`, {
-          completionDate: completionDate.format('YYYY-MM-DD HH:mm:ss'),
+      console.log(`Recent completed job found: UUID ${jobUuid}, Completion Date ${completionDate.format('YYYY-MM-DD HH:mm:ss')}`);
+      const webhookPayload = {
+        jobUuid: jobUuid,
+        clientEmail: clientEmail || '',
+        phone: clientPhone || '',
+        ghlContactId: ghlContactId,
+        status: 'Job Completed',
+      };
+
+      try {
+        const webhookResponse = await axios.post(GHL_WEBHOOK_URL, webhookPayload, {
+          headers: {
+            Authorization: `Bearer ${await getAccessToken()}`,
+            'Content-Type': 'application/json',
+          },
         });
+        console.log(`GHL webhook triggered for job ${jobUuid}: status=${webhookResponse.status}`);
+        processedJobs.add(jobUuid);
+        if (contactKey) processedContacts.add(contactKey);
+      } catch (webhookError) {
+        console.error(`Failed to trigger GHL webhook for job ${jobUuid}:`, webhookError.response ? webhookError.response.data : webhookError.message);
       }
     }
 
@@ -782,6 +768,8 @@ const checkJobCompletions = async () => {
     console.error('Error checking job completions:', error.response ? error.response.data : error.message);
   }
 };
+
+
 // Helper function to get file extension from MIME type
 function getFileExtensionFromMime(mime) {
   const mimeToExt = {
