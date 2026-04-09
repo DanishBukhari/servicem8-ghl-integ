@@ -812,7 +812,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     processedGhlContactIds.set(ghlContactId, now);
     console.log(`Processing job creation for ghlContactId ${ghlContactId}`);
     // c6d397cb-a59b-42ea-ad11-233936a7ddfb for test
-    const queueUuid = '199fa87d-3929-4a10-ad61-240c92d387bb'; 
+    const queueUuid = '6bced9d5-c84a-4d47-84bf-22dff884744b'; 
     if (!queueUuid) {
       console.log('Failed to fetch "To Be Quoted (Desk Quote)" queue UUID');
       return res.status(500).json({ error: 'Failed to fetch "To Be Quoted (Desk Quote)" queue UUID' });
