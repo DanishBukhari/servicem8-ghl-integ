@@ -543,7 +543,6 @@ const checkNewContacts = async () => {
   }
 };
 // Check job completions and trigger GHL webhook for review requests
-// Check job completions and trigger GHL webhook for review requests
 const checkJobCompletions = async () => {
   try {
     console.log('Starting job completion check...');
@@ -624,15 +623,12 @@ const checkJobCompletions = async () => {
         }
       }
 
-      // NEW CONDITION: Trigger webhook ONLY if category is exactly "Residential Homeowner"
+      // Trigger webhook ONLY if category is exactly "residential homeowner"
       if (categoryName !== 'residential homeowner') {
         console.log(`Skipping webhook for job ${jobUuid} - category is "${categoryName}" (only Residential Homeowner triggers review)`);
         processedJobs.add(jobUuid);
         continue;
       }
-
-      // If we reach here, it's Residential Homeowner → proceed with webhook
-      console.log(`Job ${jobUuid} is Residential Homeowner - proceeding with review webhook`);
 
       let ghlContactId = '';
       if (job.job_description) {
@@ -774,6 +770,7 @@ const checkJobCompletions = async () => {
   }
 };
 
+
 // Helper function to get file extension from MIME type
 function getFileExtensionFromMime(mime) {
   const mimeToExt = {
@@ -816,7 +813,7 @@ app.post('/ghl-create-job', upload.array('photos'), async (req, res) => {
     processedGhlContactIds.set(ghlContactId, now);
     console.log(`Processing job creation for ghlContactId ${ghlContactId}`);
     // c6d397cb-a59b-42ea-ad11-233936a7ddfb for test
-    const queueUuid = '199fa87d-3929-4a10-ad61-240c92d387bb'; 
+    const queueUuid = '6bced9d5-c84a-4d47-84bf-22dff884744b'; 
     if (!queueUuid) {
       console.log('Failed to fetch "To Be Quoted (Desk Quote)" queue UUID');
       return res.status(500).json({ error: 'Failed to fetch "To Be Quoted (Desk Quote)" queue UUID' });
